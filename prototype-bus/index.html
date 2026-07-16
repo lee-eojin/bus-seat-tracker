@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>빨간버스 좌석 현황</title>
+<style>
+:root{
+  --ok:#237b55;--ok-soft:rgba(35,123,85,.12);
+  --warn:#a85a00;--warn-soft:rgba(168,90,0,.12);
+  --bad:#c62c40;--bad-soft:rgba(198,44,64,.10);
+  --unknown:#6b7280;--unknown-soft:rgba(107,114,128,.12);
+  --ink:#1c2330;--sub:#5b6472;--line:#e3e7ec;--panel:#f6f8fa;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:#eef1f4;color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Pretendard","Noto Sans KR",sans-serif;font-size:15px;line-height:1.5}
+.app{max-width:520px;margin:0 auto;min-height:100dvh;background:#fff;padding:20px 18px calc(28px + env(safe-area-inset-bottom))}
+header h1{margin:0;font-size:21px;letter-spacing:-.5px}
+.subtitle{margin:4px 0 0;color:var(--sub);font-size:13px}
+.freshness{display:inline-flex;align-items:center;gap:7px;margin-top:14px;padding:7px 12px;border-radius:999px;background:var(--panel);font-size:13px;font-weight:700}
+.freshness i{width:9px;height:9px;border-radius:50%;background:var(--unknown)}
+.freshness.ok i{background:var(--ok)}
+.freshness.warn i{background:var(--warn)}
+.freshness.bad i{background:var(--bad)}
+.stale-banner{display:none;margin-top:12px;padding:12px 14px;border-radius:12px;background:var(--bad-soft);color:#8a1f30;font-size:13px;line-height:1.55}
+.stale-banner.show{display:block}
+.stale-banner code{font-size:12px;background:rgba(255,255,255,.7);padding:1px 5px;border-radius:5px}
+.route-tabs{display:flex;gap:8px;margin-top:18px}
+.route-tab{flex:1;border:1px solid var(--line);border-radius:12px;background:#fff;padding:10px 8px;font:inherit;font-size:15px;font-weight:800;color:var(--sub);cursor:pointer}
+.route-tab.active{border-color:var(--bad);background:var(--bad-soft);color:var(--bad)}
+.route-endpoints{margin:10px 2px 0;color:var(--sub);font-size:13px}
+.direction-tabs{display:flex;gap:6px;margin-top:14px;padding:4px;border-radius:11px;background:var(--panel)}
+.direction-tab{flex:1;border:0;border-radius:8px;background:transparent;padding:8px 6px;font:inherit;font-size:13.5px;font-weight:800;color:var(--sub);cursor:pointer}
+.direction-tab.active{background:#fff;color:var(--ink);box-shadow:0 1px 6px rgba(28,35,48,.12)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 12px;margin:14px 2px 4px;color:var(--sub);font-size:12.5px}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:5px;vertical-align:0}
+.legend .ok i{background:var(--ok)}.legend .warn i{background:var(--warn)}.legend .bad i{background:var(--bad)}.legend .unknown i{background:var(--unknown)}
+.axis{margin-top:10px;border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.stop-row{display:flex;align-items:center;gap:12px;min-height:46px;padding:5px 14px;position:relative}
+.stop-row + .stop-row{border-top:1px solid #eef1f4}
+.stop-row.tint-ok{background:var(--ok-soft)}
+.stop-row.tint-warn{background:var(--warn-soft)}
+.stop-row.tint-bad{background:var(--bad-soft)}
+.stop-row.tint-unknown{background:var(--unknown-soft)}
+.stop-dot{width:10px;height:10px;flex:none;border-radius:50%;border:2px solid #aab3bf;background:#fff}
+.stop-row.terminal .stop-dot{border-color:var(--ink);background:var(--ink)}
+.stop-name{flex:1;min-width:0;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stop-name small{display:block;color:var(--sub);font-size:12px;font-weight:500}
+.vehicle{flex:none;display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:6px 11px;font-size:12.5px;font-weight:800;color:#fff}
+.vehicle.ok{background:var(--ok)}
+.vehicle.warn{background:var(--warn)}
+.vehicle.bad{background:var(--bad)}
+.vehicle.unknown{background:var(--unknown)}
+.empty-note{padding:26px 16px;text-align:center;color:var(--sub);font-size:14px}
+.setup{display:none;margin-top:22px;padding:20px;border-radius:14px;background:var(--panel);font-size:14px;line-height:1.7}
+.setup.show{display:block}
+.setup code{display:block;margin-top:8px;padding:10px 12px;border-radius:9px;background:#fff;font-size:12.5px;overflow-x:auto;white-space:nowrap}
+.board{display:none}
+.board.show{display:block}
+footer{margin-top:22px;color:var(--sub);font-size:12px;line-height:1.6}
+</style>
+</head>
+<body>
+<main class="app">
+  <header>
+    <h1>빨간버스 좌석 현황</h1>
+    <p class="subtitle">경기도 버스정보(GBIS) 차량별 빈자리 스냅샷</p>
+    <div class="freshness" id="freshness"><i></i><span id="freshness-text">데이터 확인 중</span></div>
+    <div class="stale-banner" id="stale-banner"></div>
+  </header>
+
+  <div class="setup" id="setup">
+    <b>표시할 데이터가 아직 없습니다.</b><br>
+    수집된 스냅샷을 집계한 뒤 이 페이지를 새로고침하세요.
+    <code>node build-data.mjs --watch</code>
+    수집 자체가 처음이라면 bus-seat-collector/RUNNING.md의 가동 절차를 먼저 진행하세요.
+  </div>
+
+  <div class="board" id="board">
+    <div class="route-tabs" id="route-tabs"></div>
+    <p class="route-endpoints" id="route-endpoints"></p>
+    <div class="direction-tabs" id="direction-tabs"></div>
+    <div class="legend">
+      <span class="ok"><i></i>10석 이상</span>
+      <span class="warn"><i></i>1~9석</span>
+      <span class="bad"><i></i>0석</span>
+      <span class="unknown"><i></i>정보 없음</span>
+    </div>
+    <div class="axis" id="axis"></div>
+    <footer>정류장 줄의 배경색은 그 정류장으로 다가오는 가장 가까운 버스의 좌석 상태입니다.
+    스냅샷은 5~15분 간격으로 수집되므로 차량이 표시 위치보다 앞서 있을 수 있습니다.</footer>
+  </div>
+</main>
+<script src="data/latest.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
