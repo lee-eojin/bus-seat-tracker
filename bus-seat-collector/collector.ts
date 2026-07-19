@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { asList, isRecord, readNumber, readString, type Route, type RouteStop, type Snapshot, type VehicleSnapshot } from '../shared/model.js';
+import { asList, isRecord, readIdentifier, readNumber, type Route, type RouteStop, type Snapshot, type VehicleSnapshot } from '../shared/model.js';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(currentDirectory, '..', '..');
@@ -92,7 +92,7 @@ function getQueryTime(payload: unknown): string | null {
     : isRecord(payload.msgHeader)
       ? payload.msgHeader
       : null;
-  return header ? readString(header.queryTime) : null;
+  return header ? readIdentifier(header.queryTime) : null;
 }
 
 async function requestApi(apiPath: string, parameters: Record<string, string>, apiKey: string): Promise<unknown> {
@@ -110,17 +110,17 @@ async function requestApi(apiPath: string, parameters: Record<string, string>, a
 
 async function findRoute(routeName: string, apiKey: string): Promise<Route> {
   const routes = getResponseItems(await requestApi(apiPaths.routes, { keyword: routeName }, apiKey), ['busRouteList', 'busRoute']);
-  const candidate = routes.find((route) => isRecord(route) && readString(route.routeName) === routeName);
+  const candidate = routes.find((route) => isRecord(route) && readIdentifier(route.routeName) === routeName);
   if (!isRecord(candidate)) throw new Error(`${routeName}번의 정확한 노선 ID를 찾지 못했습니다.`);
-  const id = readString(candidate.routeId);
-  const name = readString(candidate.routeName);
+  const id = readIdentifier(candidate.routeId);
+  const name = readIdentifier(candidate.routeName);
   if (!id || !name) throw new Error(`${routeName}번의 노선 응답이 완전하지 않습니다.`);
   return {
     id,
     name,
-    type: readString(candidate.routeTypeName),
-    startStationName: readString(candidate.startStationName),
-    endStationName: readString(candidate.endStationName),
+    type: readIdentifier(candidate.routeTypeName),
+    startStationName: readIdentifier(candidate.startStationName),
+    endStationName: readIdentifier(candidate.endStationName),
   };
 }
 
@@ -129,8 +129,8 @@ function readStop(value: unknown): RouteStop | null {
   const sequence = readNumber(value.stationSeq);
   if (sequence === null) return null;
   return {
-    id: readString(value.stationId),
-    name: readString(value.stationName),
+    id: readIdentifier(value.stationId),
+    name: readIdentifier(value.stationName),
     sequence,
     directionSequence: readNumber(value.turnSeq),
     isTurnStop: value.turnYn === 'Y',
@@ -147,16 +147,16 @@ async function fetchRouteStops(route: Route, apiKey: string): Promise<RouteStop[
   return stops;
 }
 
-function anonymizeVehicleId(vehicle: Record<string, unknown>, apiKey: string): string | null {
-  const vehicleId = readString(vehicle.plateNo) ?? readString(vehicle.vehId);
-  return vehicleId ? createHmac('sha256', apiKey).update(vehicleId).digest('hex').slice(0, 16) : null;
+function anonymizeVehicleId(vehicle: Record<string, unknown>, hashSecret: string): string | null {
+  const vehicleId = readIdentifier(vehicle.plateNo) ?? readIdentifier(vehicle.vehId);
+  return vehicleId ? createHmac('sha256', hashSecret).update(vehicleId).digest('hex').slice(0, 16) : null;
 }
 
-function readVehicle(value: unknown, apiKey: string): VehicleSnapshot | null {
+function readVehicle(value: unknown, hashSecret: string): VehicleSnapshot | null {
   if (!isRecord(value)) return null;
   return {
-    id: anonymizeVehicleId(value, apiKey),
-    currentStopId: readString(value.stationId),
+    id: anonymizeVehicleId(value, hashSecret),
+    currentStopId: readIdentifier(value.stationId),
     currentStopSequence: readNumber(value.stationSeq),
     remainingSeats: readNumber(value.remainSeatCnt),
     crowded: readNumber(value.crowded),
@@ -164,14 +164,14 @@ function readVehicle(value: unknown, apiKey: string): VehicleSnapshot | null {
   };
 }
 
-async function fetchVehicleSnapshot(route: Route, apiKey: string): Promise<Snapshot> {
+async function fetchVehicleSnapshot(route: Route, apiKey: string, hashSecret: string): Promise<Snapshot> {
   const payload = await requestApi(apiPaths.vehicleLocations, { routeId: route.id }, apiKey);
   return {
     collectedAt: new Date().toISOString(),
     route,
     apiQueryTime: getQueryTime(payload),
     vehicles: getResponseItems(payload, ['busLocationList', 'busLocation'])
-      .map((vehicle) => readVehicle(vehicle, apiKey))
+      .map((vehicle) => readVehicle(vehicle, hashSecret))
       .filter((vehicle): vehicle is VehicleSnapshot => vehicle !== null),
   };
 }
@@ -189,8 +189,8 @@ async function appendSnapshot(snapshot: Snapshot): Promise<void> {
   await appendFile(filePath, `${JSON.stringify(snapshot)}\n`);
 }
 
-async function collectOnce(routes: Route[], apiKey: string): Promise<void> {
-  const snapshots = await Promise.all(routes.map((route) => fetchVehicleSnapshot(route, apiKey)));
+async function collectOnce(routes: Route[], apiKey: string, hashSecret: string): Promise<void> {
+  const snapshots = await Promise.all(routes.map((route) => fetchVehicleSnapshot(route, apiKey, hashSecret)));
   await Promise.all(snapshots.map(appendSnapshot));
   const vehicleCount = snapshots.reduce((count, snapshot) => count + snapshot.vehicles.length, 0);
   console.log(`${new Date().toLocaleTimeString('ko-KR')} · ${snapshots.length}개 노선, 운행 차량 ${vehicleCount}대 저장`);
@@ -205,12 +205,14 @@ async function main(): Promise<void> {
   await loadEnvironment();
   const apiKey = process.env.GYEONGGI_BUS_API_KEY;
   if (!apiKey) throw new Error('GYEONGGI_BUS_API_KEY가 없습니다. .env.example을 복사해 .env에 입력하세요.');
+  const hashSecret = process.env.VEHICLE_HASH_SECRET;
+  if (!hashSecret) throw new Error('VEHICLE_HASH_SECRET이 없습니다. API 키와 분리된 임의의 긴 값을 입력하세요.');
 
   const routeNames = (process.env.ROUTE_NAMES ?? '3330,1650').split(',').map((routeName) => routeName.trim()).filter(Boolean);
   const routes = await Promise.all(routeNames.map((routeName) => findRoute(routeName, apiKey)));
   await Promise.all(routes.map(async (route) => cacheRouteStops(route, await fetchRouteStops(route, apiKey))));
   if (options.once) {
-    await collectOnce(routes, apiKey);
+    await collectOnce(routes, apiKey, hashSecret);
     return;
   }
 
@@ -223,7 +225,7 @@ async function main(): Promise<void> {
   const endsAt = Date.now() + durationHours * 60 * 60 * 1_000;
   do {
     try {
-      await collectOnce(routes, apiKey);
+      await collectOnce(routes, apiKey, hashSecret);
     } catch (error: unknown) {
       console.error(`수집 실패: ${error instanceof Error ? error.message : String(error)}`);
     }
