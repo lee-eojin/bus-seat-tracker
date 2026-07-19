@@ -5,10 +5,10 @@
 ## 준비
 
 1. 경기도 버스정보 API의 일반 인증키를 발급받는다.
-2. `.env.example`을 `.env`로 복사하고 `GYEONGGI_BUS_API_KEY`를 입력한다.
+2. `.env.example`을 `.env`로 복사하고 `GYEONGGI_BUS_API_KEY`와 무작위 `VEHICLE_HASH_SECRET`을 입력한다.
 3. 루트에서 `npm install`을 실행한다.
 
-`.env`와 `data/`는 Git에 포함되지 않는다. 차량 번호와 차량 ID는 기록 직전에 HMAC으로 가명화한다.
+`.env`와 `data/`는 Git에 포함되지 않는다. 차량 번호와 차량 ID는 기록 직전에 API 키와 분리된 HMAC 시크릿으로 가명화한다.
 
 ## 실행
 
@@ -24,3 +24,5 @@ npm run collect -- --duration-hours=3 --interval-seconds=60
 ```
 
 `ROUTE_NAMES`로 대상 노선을 바꿀 수 있다. 빈자리 `-1`은 정보 미제공이고 `0`은 관측 시점의 만석이다. 어느 값도 실제 탑승을 보장하지 않는다.
+
+자동 수집의 비공개 저장 경계와 Secrets 설정은 [RUNNING.md](RUNNING.md)를 따른다.
