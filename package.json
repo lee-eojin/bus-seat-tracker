@@ -1,0 +1,16 @@
+{
+  "name": "bus-seat-tracker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "collect": "npm run build && node dist/bus-seat-collector/collector.js",
+    "build:data": "npm run build && node dist/prototype-bus/build-data.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
+  }
+}
