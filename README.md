@@ -13,7 +13,7 @@ prototype-bus/app.ts             노선 축 UI
 shared/model.ts                  API 경계를 통과한 도메인 모델
 ```
 
-공개 저장소에는 API 키, 원문 차량 번호, 수집 데이터, 빌드 산출물을 넣지 않는다. 차량 식별자는 수집 시 API 키 기반 HMAC 값으로만 저장한다.
+공개 저장소에는 API 키, 원문 차량 번호, 수집 데이터, 빌드 산출물을 넣지 않는다. 차량별 원본 스냅샷은 `bus-seat-tracker-data` 비공개 저장소에만 저장하고, 가명화에는 API 키와 분리한 HMAC 시크릿을 쓴다.
 
 ## 시작하기
 
@@ -30,6 +30,16 @@ open prototype-bus/index.html
 ```
 
 `npm run typecheck`은 산출물 없이 타입만 검사하고, `npm run build`는 `dist/`에 JavaScript를 만든다.
+
+## 자동 수집 재가동
+
+`.github/workflows/collect-bus-seats.yml`은 공개 저장소에서 5분마다 실행하고, `bus-seat-tracker-data` 비공개 저장소에만 스냅샷을 저장한다. 워크플로를 기본 브랜치에 반영한 뒤 다음 GitHub Actions Secrets를 설정해야 한다.
+
+- `GYEONGGI_BUS_API_KEY`: 공공데이터포털에서 재발급한 새 인증키
+- `VEHICLE_HASH_SECRET`: API 키와 무관한 임의의 긴 비밀값
+- `BUS_DATA_REPO_TOKEN`: `bus-seat-tracker-data`의 Contents 읽기·쓰기만 허용한 fine-grained PAT
+
+Secrets가 준비되면 Actions의 **Collect bus seats**를 한 번 수동 실행해 비공개 저장소에 첫 스냅샷이 쌓이는지 확인한다. 스케줄은 기본 브랜치에서만 작동한다.
 
 ## 브랜치
 
