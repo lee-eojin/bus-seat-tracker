@@ -1,0 +1,76 @@
+name: Collect bus seats
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/5 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bus-seat-collection
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/checkout@v4
+        with:
+          repository: lee-eojin/bus-seat-tracker-data
+          token: ${{ secrets.BUS_DATA_REPO_TOKEN }}
+          path: private-data
+
+      - run: npm ci
+
+      - run: npm run collect -- --once
+        env:
+          BUS_DATA_DIR: ${{ github.workspace }}/private-data/data
+          GYEONGGI_BUS_API_KEY: ${{ secrets.GYEONGGI_BUS_API_KEY }}
+          VEHICLE_HASH_SECRET: ${{ secrets.VEHICLE_HASH_SECRET }}
+
+      - uses: actions/github-script@v7
+        env:
+          DATA_REPOSITORY_TOKEN: ${{ secrets.BUS_DATA_REPO_TOKEN }}
+        with:
+          github-token: ${{ secrets.BUS_DATA_REPO_TOKEN }}
+          script: |
+            const fs = require('node:fs/promises');
+            const path = require('node:path');
+            const [owner, repo] = 'lee-eojin/bus-seat-tracker-data'.split('/');
+            const dataDirectory = path.join(process.env.GITHUB_WORKSPACE, 'private-data', 'data');
+
+            async function listFiles(directory) {
+              const entries = await fs.readdir(directory, { withFileTypes: true });
+              const files = await Promise.all(entries.map(async (entry) => {
+                const entryPath = path.join(directory, entry.name);
+                return entry.isDirectory() ? listFiles(entryPath) : [entryPath];
+              }));
+              return files.flat();
+            }
+
+            const files = await listFiles(dataDirectory);
+            const reference = await github.rest.git.getRef({ owner, repo, ref: 'heads/main' });
+            const previousCommit = await github.rest.git.getCommit({ owner, repo, commit_sha: reference.data.object.sha });
+            const tree = await Promise.all(files.map(async (filePath) => {
+              const content = await fs.readFile(filePath);
+              const blob = await github.rest.git.createBlob({ owner, repo, content: content.toString('base64'), encoding: 'base64' });
+              return { path: path.relative(path.join(process.env.GITHUB_WORKSPACE, 'private-data'), filePath), mode: '100644', type: 'blob', sha: blob.data.sha };
+            }));
+            const nextTree = await github.rest.git.createTree({ owner, repo, base_tree: previousCommit.data.tree.sha, tree });
+            const nextCommit = await github.rest.git.createCommit({
+              owner,
+              repo,
+              message: `data: collect bus seats ${new Date().toISOString()}`,
+              tree: nextTree.data.sha,
+              parents: [reference.data.object.sha],
+            });
+            await github.rest.git.updateRef({ owner, repo, ref: 'heads/main', sha: nextCommit.data.sha });

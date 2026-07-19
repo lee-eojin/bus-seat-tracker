@@ -1,5 +1,5 @@
-.DS_Store
+node_modules/
+dist/
 .env*
 bus-seat-collector/data/
 prototype-bus/data/
-logs/
