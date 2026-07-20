@@ -123,7 +123,7 @@ function renderRouteTabs(payload: LatestPayload, route: LatestRoute): void {
   container.replaceChildren(...payload.routes.map((entry) => {
     const tab = document.createElement('button');
     tab.type = 'button';
-    tab.className = `route-tab${entry === route ? ' active' : ''}`;
+    tab.className = `route-tab${entry.route.name === route.route.name ? ' active' : ''}`;
     tab.textContent = entry.route.name;
     tab.addEventListener('click', () => {
       selection.routeName = entry.route.name;
