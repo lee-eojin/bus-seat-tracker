@@ -33,13 +33,13 @@ open prototype-bus/index.html
 
 ## 자동 수집 재가동
 
-`.github/workflows/collect-bus-seats.yml`은 공개 저장소에서 5분마다 실행하고, `bus-seat-tracker-data` 비공개 저장소에만 스냅샷을 저장한다. 워크플로를 기본 브랜치에 반영한 뒤 다음 GitHub Actions Secrets를 설정해야 한다.
+`.github/workflows/collect-bus-seats.yml`은 공개 저장소에서 5분마다 실행하고, `bus-seat-tracker-data` 비공개 저장소에만 스냅샷을 저장한다. 한국 날짜별 `collect/YYYY-MM-DD` 브랜치에 수집을 누적한 뒤, 다음 날 첫 수집에서 전날 브랜치를 `main`의 단일 아카이브 커밋으로 반영하고 삭제한다. 워크플로를 기본 브랜치에 반영한 뒤 다음 GitHub Actions Secrets를 설정해야 한다.
 
 - `GYEONGGI_BUS_API_KEY`: 공공데이터포털에서 재발급한 새 인증키
 - `VEHICLE_HASH_SECRET`: API 키와 무관한 임의의 긴 비밀값
 - `BUS_DATA_REPO_TOKEN`: `bus-seat-tracker-data`의 Contents 읽기·쓰기만 허용한 fine-grained PAT
 
-Secrets가 준비되면 Actions의 **Collect bus seats**를 한 번 수동 실행해 비공개 저장소에 첫 스냅샷이 쌓이는지 확인한다. 스케줄은 기본 브랜치에서만 작동한다.
+Secrets가 준비되면 Actions의 **Collect bus seats**를 한 번 수동 실행해 비공개 저장소의 당일 `collect/YYYY-MM-DD` 브랜치에 첫 스냅샷이 쌓이는지 확인한다. 스케줄은 기본 브랜치에서만 작동한다.
 
 ## 브랜치
 

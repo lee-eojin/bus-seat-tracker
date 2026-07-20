@@ -3,7 +3,7 @@
 ## 데이터 경계
 
 - 공개 `bus-seat-tracker`: 수집기 코드와 워크플로만 보관한다.
-- 비공개 `bus-seat-tracker-data`: `data/routes`, `data/snapshots`만 보관한다.
+- 비공개 `bus-seat-tracker-data`: `data/routes`, `data/snapshots`만 보관한다. 당일 수집은 `collect/YYYY-MM-DD` 브랜치에 누적하고, 다음 날 첫 수집에서 날짜당 한 커밋으로 `main`에 반영한다.
 - 공개 화면에는 차량 번호, HMAC 차량 ID, 원본 스냅샷을 전달하지 않는다.
 
 ## 시작 전 설정
@@ -22,7 +22,7 @@ GitHub Actions Secrets에 다음 값을 등록한다.
 
 1. `main`에 `collect-bus-seats.yml`을 반영한다.
 2. Actions에서 **Collect bus seats**를 수동 실행한다.
-3. 비공개 저장소의 `data/snapshots`에 3330·1650 JSONL이 생겼는지 확인한다.
+3. 비공개 저장소의 당일 `collect/YYYY-MM-DD` 브랜치 `data/snapshots`에 3330·1650 JSONL이 생겼는지 확인한다.
 4. 이후 5분 스케줄을 관찰한다. GitHub Actions 스케줄은 지연될 수 있으므로, 화면에는 관측 시각을 항상 표시한다.
 
 ## 보관 원칙
