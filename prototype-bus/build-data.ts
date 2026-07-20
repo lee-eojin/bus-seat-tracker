@@ -136,6 +136,8 @@ function buildLatestRoute(cache: RouteCache, snapshot: Snapshot | null): LatestR
       name: stop.name,
       direction: directionOf(stop.sequence, turnSequence),
       isTurn: stop.isTurnStop || stop.sequence === turnSequence,
+      latitude: stop.latitude,
+      longitude: stop.longitude,
     })),
     vehicles: (snapshot?.vehicles ?? []).map((vehicle: VehicleSnapshot) => ({
       id: vehicle.id,

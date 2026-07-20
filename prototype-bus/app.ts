@@ -1,4 +1,4 @@
-import { readLatestPayload, type Direction, type DisplayVehicle, type LatestPayload, type LatestRoute, type SeatState } from '../shared/model.js';
+import { readLatestPayload, type Direction, type DisplayStop, type DisplayVehicle, type LatestPayload, type LatestRoute, type SeatState } from '../shared/model.js';
 
 declare global {
   interface Window {
@@ -157,6 +157,17 @@ function renderDirectionTabs(route: LatestRoute): void {
   }));
 }
 
+// 카카오맵 오픈 API에는 대중교통 길찾기가 없어 링크로 위임한다.
+// 터치 기기는 앱·모바일웹 겸용 스킴 브리지, 그 외에는 웹 지도 링크.
+function kakaoRouteHref(stop: DisplayStop): string | null {
+  if (stop.latitude === null || stop.longitude === null) return null;
+  const destination = `${stop.latitude},${stop.longitude}`;
+  if (matchMedia('(pointer: coarse)').matches) {
+    return `https://m.map.kakao.com/scheme/route?ep=${destination}&by=publictransit`;
+  }
+  return `https://map.kakao.com/link/to/${encodeURIComponent(stop.name ?? '정류장')},${destination}`;
+}
+
 function nextVehicleFor(stopSequence: number, vehicles: DisplayVehicle[]): DisplayVehicle | null {
   return vehicles
     .filter((vehicle) => vehicle.stationSeq !== null && vehicle.stationSeq <= stopSequence)
@@ -200,6 +211,16 @@ function renderAxis(route: LatestRoute): void {
       pill.className = `vehicle ${seatState(vehicle)}`;
       pill.textContent = `${vehicle.id ?? '차량'} · ${seatLabel(vehicle)}`;
       row.append(pill);
+    }
+    const routeHref = kakaoRouteHref(stop);
+    if (routeHref) {
+      const link = document.createElement('a');
+      link.className = 'stop-route-link';
+      link.href = routeHref;
+      link.target = '_blank';
+      link.rel = 'noreferrer';
+      link.textContent = '길찾기';
+      row.append(link);
     }
     axis.append(row);
   });

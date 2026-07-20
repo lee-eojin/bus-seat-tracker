@@ -47,6 +47,8 @@ export interface DisplayStop {
   name: string | null;
   direction: Direction | null;
   isTurn: boolean;
+  latitude: number | null;
+  longitude: number | null;
 }
 
 export interface DisplayVehicle {
@@ -185,7 +187,14 @@ function readDisplayStop(value: unknown): DisplayStop | null {
   if (!isRecord(value)) return null;
   const sequence = readNumber(value.sequence);
   if (sequence === null) return null;
-  return { sequence, name: readString(value.name), direction: readDirection(value.direction), isTurn: value.isTurn === true };
+  return {
+    sequence,
+    name: readString(value.name),
+    direction: readDirection(value.direction),
+    isTurn: value.isTurn === true,
+    latitude: readNumber(value.latitude),
+    longitude: readNumber(value.longitude),
+  };
 }
 
 function readDisplayVehicle(value: unknown): DisplayVehicle | null {
