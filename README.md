@@ -31,6 +31,16 @@ open prototype-bus/index.html
 
 `npm run typecheck`은 산출물 없이 타입만 검사하고, `npm run build`는 `dist/`에 JavaScript를 만든다.
 
+## 실시간 좌석 오버레이 (선택)
+
+`prototype-bus/data/config.js`에 GBIS 인증키를 넣으면 화면이 60초마다 잔여석을 직접 조회해 스냅샷 위에 덮어쓴다. `prototype-bus/data/`는 gitignore 대상이라 키가 저장소에 올라가지 않는다.
+
+```js
+window.__CONFIG__ = { gbisApiKey: '공공데이터포털에서 발급한 인증키' };
+```
+
+키가 없으면 수집 스냅샷 표시로 동작한다. 라이브 응답의 차량번호는 표시하지도 저장하지도 않는다. 공개 배포 시에는 이 방식을 쓰면 키가 노출되므로, 그때는 프록시나 발행 주기 강화로 대체해야 한다.
+
 ## 자동 수집 재가동
 
 `.github/workflows/collect-bus-seats.yml`은 공개 저장소에서 5분마다 실행하고, `bus-seat-tracker-data` 비공개 저장소에만 스냅샷을 저장한다. 한국 날짜별 `collect/YYYY-MM-DD` 브랜치에 수집을 누적한 뒤, 다음 날 첫 수집에서 전날 브랜치를 `main`의 단일 아카이브 커밋으로 반영하고 삭제한다. 워크플로를 기본 브랜치에 반영한 뒤 다음 GitHub Actions Secrets를 설정해야 한다.
