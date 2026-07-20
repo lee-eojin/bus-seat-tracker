@@ -159,14 +159,11 @@ async function refreshLiveVehicles(): Promise<void> {
 }
 
 // 카카오맵 오픈 API에는 대중교통 길찾기가 없어 링크로 위임한다.
-// 터치 기기는 앱·모바일웹 겸용 스킴 브리지, 그 외에는 웹 지도 링크.
+// 스킴 브리지는 앱·모바일웹·데스크톱 모두에서 by=publictransit을 유지한다.
+// map.kakao.com/link/* 웹 링크는 교통수단 파라미터가 없어 자가용으로 열리므로 쓰지 않는다.
 function kakaoRouteHref(stop: DisplayStop): string | null {
   if (stop.latitude === null || stop.longitude === null) return null;
-  const destinationPoint = `${stop.latitude},${stop.longitude}`;
-  if (matchMedia('(pointer: coarse)').matches) {
-    return `https://m.map.kakao.com/scheme/route?ep=${destinationPoint}&by=publictransit`;
-  }
-  return `https://map.kakao.com/link/to/${encodeURIComponent(stop.name ?? '정류장')},${destinationPoint}`;
+  return `https://m.map.kakao.com/scheme/route?ep=${stop.latitude},${stop.longitude}&by=publictransit`;
 }
 
 function normalizeStopName(name: string): string {
@@ -193,12 +190,7 @@ function destinationLegHref(stop: DisplayStop): string | null {
   if (!target || target.latitude === null || target.longitude === null) {
     return `https://map.kakao.com/link/search/${encodeURIComponent(destination)}`;
   }
-  if (matchMedia('(pointer: coarse)').matches) {
-    return `https://m.map.kakao.com/scheme/route?sp=${stop.latitude},${stop.longitude}&ep=${target.latitude},${target.longitude}&by=publictransit`;
-  }
-  const from = `${encodeURIComponent(stop.name ?? '정류장')},${stop.latitude},${stop.longitude}`;
-  const to = `${encodeURIComponent(destination)},${target.latitude},${target.longitude}`;
-  return `https://map.kakao.com/link/from/${from}/to/${to}`;
+  return `https://m.map.kakao.com/scheme/route?sp=${stop.latitude},${stop.longitude}&ep=${target.latitude},${target.longitude}&by=publictransit`;
 }
 
 function renderFreshness(route: LatestRoute): void {
