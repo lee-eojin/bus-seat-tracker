@@ -2,8 +2,19 @@ name: Collect bus seats
 
 on:
   workflow_dispatch:
+    inputs:
+      event-duration-minutes:
+        description: '이벤트 모드 수집 시간(분). 비우면 시간대 규칙을 따른다'
+        required: false
+      event-interval-seconds:
+        description: '이벤트 모드 수집 간격(초)'
+        required: false
+        default: '300'
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '0 * * * *'      # 매시 기본 스냅샷. 피크 창 안에 떨어지면 루프 백업 시동 역할
+    - cron: '30 21 * * 0-4'  # KST 평일 06:30 아침 피크 시동
+    - cron: '30 8 * * 1-5'   # KST 평일 17:30 저녁 피크 시동
+    - cron: '0 7 * * 6,0'    # KST 주말 16:00 저녁 피크 시동
 
 permissions:
   contents: read
@@ -15,6 +26,7 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
 
@@ -117,21 +129,67 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run collect -- --once
+      - run: npm run build
+
+      - name: Collect until window end
+        uses: actions/github-script@v7
         env:
+          COLLECTION_BRANCH: ${{ steps.collection-day.outputs.branch }}
           BUS_DATA_DIR: ${{ github.workspace }}/private-data/data
           GYEONGGI_BUS_API_KEY: ${{ secrets.GYEONGGI_BUS_API_KEY }}
           VEHICLE_HASH_SECRET: ${{ secrets.VEHICLE_HASH_SECRET }}
-
-      - uses: actions/github-script@v7
+          EVENT_DURATION_MINUTES: ${{ inputs.event-duration-minutes }}
+          EVENT_INTERVAL_SECONDS: ${{ inputs.event-interval-seconds }}
         with:
           github-token: ${{ secrets.BUS_DATA_REPO_TOKEN }}
           script: |
+            const { execFileSync } = require('node:child_process');
             const fs = require('node:fs/promises');
             const path = require('node:path');
+
             const [owner, repo] = 'lee-eojin/bus-seat-tracker-data'.split('/');
-            const dataDirectory = path.join(process.env.GITHUB_WORKSPACE, 'private-data', 'data');
-            const branch = '${{ steps.collection-day.outputs.branch }}';
+            const branch = process.env.COLLECTION_BRANCH;
+            const workspace = process.env.GITHUB_WORKSPACE;
+            const privateDataRoot = path.join(workspace, 'private-data');
+            const dataDirectory = path.join(privateDataRoot, 'data');
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+            // KST 피크 창. 분 단위: 평일 06:30-10:30, 17:30-21:30 / 주말 16:00-22:00
+            // 시동 크론이 스로틀돼도, 창 시작 60분 전 이후에 도착한 어떤 실행이든 창을 이어받는다.
+            function activeWindow() {
+              const shifted = new Date(Date.now() + 9 * 3600 * 1000);
+              const day = shifted.getUTCDay();
+              const minutes = shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
+              const windows = day === 0 || day === 6 ? [[960, 1320]] : [[390, 630], [1050, 1290]];
+              const found = windows.find(([start, end]) => minutes >= start - 60 && minutes < end);
+              if (!found) return null;
+              const kstMidnightMs = shifted.setUTCHours(0, 0, 0, 0);
+              return {
+                startMs: kstMidnightMs + found[0] * 60000 - 9 * 3600 * 1000,
+                endMs: kstMidnightMs + found[1] * 60000 - 9 * 3600 * 1000,
+              };
+            }
+
+            let loopStartMs = Date.now();
+            let loopEndMs = Date.now();
+            let intervalSeconds = 600;
+            const eventDuration = Number(process.env.EVENT_DURATION_MINUTES || '');
+            if (eventDuration > 0) {
+              loopEndMs = Date.now() + eventDuration * 60000;
+              intervalSeconds = Number(process.env.EVENT_INTERVAL_SECONDS || '') || 300;
+              core.info(`이벤트 모드: ${eventDuration}분 동안 ${intervalSeconds}초 간격 수집`);
+            } else {
+              const window = activeWindow();
+              if (window) {
+                loopStartMs = window.startMs;
+                loopEndMs = window.endMs;
+                core.info(`피크 창 수집: ${new Date(window.endMs).toISOString()}까지 ${intervalSeconds}초 간격`);
+              } else {
+                core.info('비피크: 1회 스냅샷만 수집');
+              }
+            }
+            // 러너 6시간 한도 보호. 남은 창은 대기 중인 다음 실행이 이어받는다.
+            loopEndMs = Math.min(loopEndMs, Date.now() + 320 * 60000);
 
             async function listFiles(directory) {
               const entries = await fs.readdir(directory, { withFileTypes: true });
@@ -142,20 +200,59 @@ jobs:
               return files.flat();
             }
 
-            const files = await listFiles(dataDirectory);
-            const reference = await github.rest.git.getRef({ owner, repo, ref: `heads/${branch}` });
-            const previousCommit = await github.rest.git.getCommit({ owner, repo, commit_sha: reference.data.object.sha });
-            const tree = await Promise.all(files.map(async (filePath) => {
-              const content = await fs.readFile(filePath);
-              const blob = await github.rest.git.createBlob({ owner, repo, content: content.toString('base64'), encoding: 'base64' });
-              return { path: path.relative(path.join(process.env.GITHUB_WORKSPACE, 'private-data'), filePath), mode: '100644', type: 'blob', sha: blob.data.sha };
-            }));
-            const nextTree = await github.rest.git.createTree({ owner, repo, base_tree: previousCommit.data.tree.sha, tree });
-            const nextCommit = await github.rest.git.createCommit({
-              owner,
-              repo,
-              message: `data: collect bus seats ${new Date().toISOString()}`,
-              tree: nextTree.data.sha,
-              parents: [reference.data.object.sha],
-            });
-            await github.rest.git.updateRef({ owner, repo, ref: `heads/${branch}`, sha: nextCommit.data.sha });
+            // 체크아웃 시점의 파일은 이미 브랜치에 있으므로 업로드 대상에서 제외한다.
+            const uploadedState = new Map();
+            async function fileSignature(filePath) {
+              const stat = await fs.stat(filePath);
+              return `${stat.size}:${stat.mtimeMs}`;
+            }
+            for (const filePath of await listFiles(dataDirectory)) {
+              uploadedState.set(filePath, await fileSignature(filePath));
+            }
+
+            async function uploadChangedFiles() {
+              const changed = [];
+              for (const filePath of await listFiles(dataDirectory)) {
+                const signature = await fileSignature(filePath);
+                if (uploadedState.get(filePath) !== signature) changed.push([filePath, signature]);
+              }
+              if (changed.length === 0) return;
+
+              const reference = await github.rest.git.getRef({ owner, repo, ref: `heads/${branch}` });
+              const previousCommit = await github.rest.git.getCommit({ owner, repo, commit_sha: reference.data.object.sha });
+              const tree = await Promise.all(changed.map(async ([filePath]) => {
+                const content = await fs.readFile(filePath);
+                const blob = await github.rest.git.createBlob({ owner, repo, content: content.toString('base64'), encoding: 'base64' });
+                return { path: path.relative(privateDataRoot, filePath), mode: '100644', type: 'blob', sha: blob.data.sha };
+              }));
+              const nextTree = await github.rest.git.createTree({ owner, repo, base_tree: previousCommit.data.tree.sha, tree });
+              const nextCommit = await github.rest.git.createCommit({
+                owner,
+                repo,
+                message: `data: collect bus seats ${new Date().toISOString()}`,
+                tree: nextTree.data.sha,
+                parents: [reference.data.object.sha],
+              });
+              await github.rest.git.updateRef({ owner, repo, ref: `heads/${branch}`, sha: nextCommit.data.sha });
+              for (const [filePath, signature] of changed) uploadedState.set(filePath, signature);
+            }
+
+            do {
+              try {
+                execFileSync('node', ['dist/bus-seat-collector/collector.js', '--once'], {
+                  cwd: workspace,
+                  stdio: 'inherit',
+                  env: process.env,
+                });
+                await uploadChangedFiles();
+              } catch (error) {
+                core.warning(`수집 사이클 실패, 다음 사이클에서 재시도: ${error.message}`);
+              }
+              const now = Date.now();
+              if (now < loopStartMs) {
+                await sleep(loopStartMs - now);
+                continue;
+              }
+              if (now + intervalSeconds * 1000 >= loopEndMs) break;
+              await sleep(intervalSeconds * 1000);
+            } while (Date.now() < loopEndMs);

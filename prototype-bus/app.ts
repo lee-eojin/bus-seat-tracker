@@ -53,6 +53,15 @@ function minutesSince(isoText: string | null): number | null {
   return Number.isFinite(elapsed) ? Math.max(0, Math.round(elapsed / 60_000)) : null;
 }
 
+// 수집 워크플로의 피크 창 정의와 같은 값 (KST, 분 단위)
+function expectedIntervalMinutes(): number {
+  const shifted = new Date(Date.now() + 9 * 3600 * 1000);
+  const day = shifted.getUTCDay();
+  const minutes = shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
+  const windows: Array<[number, number]> = day === 0 || day === 6 ? [[960, 1320]] : [[390, 630], [1050, 1290]];
+  return windows.some(([start, end]) => minutes >= start && minutes < end) ? 10 : 60;
+}
+
 function currentRoute(payload: LatestPayload): LatestRoute | null {
   return payload.routes.find((entry) => entry.route.name === selection.routeName) ?? payload.routes[0] ?? null;
 }
@@ -92,19 +101,21 @@ function renderFreshness(route: LatestRoute): void {
     return;
   }
 
-  label.textContent = minutes === 0 ? '방금 수집됨' : `${minutes}분 전 수집`;
-  if (minutes <= 10) {
+  const expected = expectedIntervalMinutes();
+  const tierLabel = expected === 10 ? '집중 수집 시간대' : '시간당 수집 시간대';
+  label.textContent = `${minutes === 0 ? '방금 수집됨' : `${minutes}분 전 수집`} · ${tierLabel}`;
+  if (minutes <= expected * 2) {
     badge.classList.add('ok');
     setBanner(null);
     return;
   }
-  if (minutes <= 25) {
+  if (minutes <= expected * 4) {
     badge.classList.add('warn');
     setBanner(null);
     return;
   }
   badge.classList.add('bad');
-  setBanner(`마지막 수집이 ${minutes}분 전입니다. 수집이 멈춘 것 같습니다.`);
+  setBanner(`마지막 수집이 ${minutes}분 전입니다. 이 시간대 기대 주기(${expected}분)를 크게 벗어났습니다.`);
 }
 
 function renderRouteTabs(payload: LatestPayload, route: LatestRoute): void {
