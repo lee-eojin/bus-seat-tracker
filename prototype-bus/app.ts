@@ -1,8 +1,9 @@
-import { asList, isRecord, readLatestPayload, readNumber, type Direction, type DisplayStop, type DisplayVehicle, type LatestPayload, type LatestRoute, type SeatState } from '../shared/model.js';
+import { asList, isRecord, readHistoryPayload, readLatestPayload, readNumber, type Direction, type DisplayStop, type DisplayVehicle, type HistoryBucket, type LatestPayload, type LatestRoute, type SeatState } from '../shared/model.js';
 
 declare global {
   interface Window {
     __LATEST__?: unknown;
+    __HISTORY__?: unknown;
     __CONFIG__?: unknown;
   }
 }
@@ -25,11 +26,45 @@ interface LiveOverlay {
 const liveApiUrl = 'https://apis.data.go.kr/6410000/buslocationservice/v2/getBusLocationListv2';
 const liveFreshLimit = 180_000;
 
+interface BoardingStop {
+  routeName: string;
+  direction: Direction | null;
+  sequence: number;
+  name: string;
+}
+
+interface BoardingRecord {
+  date: string;
+  recommendation: string;
+  intuition: string;
+  followed: string;
+  result: string;
+}
+
 let selection: Selection = { routeName: null, direction: 'up' };
 let destination = localStorage.getItem('bus-destination');
 let destinationSkipped = false;
 let expandedStopSequence: number | null = null;
 let live: LiveOverlay = { routeId: null, vehicles: [], fetchedAt: null };
+let boardingStop = readBoardingStop();
+let recordFormOpen = false;
+
+function readBoardingStop(): BoardingStop | null {
+  try {
+    const raw = localStorage.getItem('bus-boarding-stop');
+    if (!raw) return null;
+    const value = JSON.parse(raw) as unknown;
+    if (!isRecord(value)) return null;
+    const routeName = typeof value.routeName === 'string' ? value.routeName : null;
+    const name = typeof value.name === 'string' ? value.name : null;
+    const sequence = readNumber(value.sequence);
+    if (!routeName || !name || sequence === null) return null;
+    const direction = value.direction === 'up' || value.direction === 'down' ? value.direction : null;
+    return { routeName, direction, sequence, name };
+  } catch {
+    return null;
+  }
+}
 
 function getElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -158,6 +193,90 @@ async function refreshLiveVehicles(): Promise<void> {
   }
 }
 
+// 추천 결정 규칙 초기값 — 근거는 설계 문서, 0단계 감사 후 조정 대상.
+const recommendationMinSamples = 10;
+const moveThreshold = 0.5;
+const candidateThreshold = 0.25;
+
+function currentSeoulBucket(): { bucket: number; weekend: boolean } {
+  const seoulClock = new Date(Date.now() + 9 * 3600 * 1000);
+  const day = seoulClock.getUTCDay();
+  return {
+    bucket: seoulClock.getUTCHours() * 2 + (seoulClock.getUTCMinutes() >= 30 ? 1 : 0),
+    weekend: day === 0 || day === 6,
+  };
+}
+
+function bucketLabel(bucket: number): string {
+  return `${String(Math.floor(bucket / 2)).padStart(2, '0')}:${bucket % 2 === 0 ? '00' : '30'}`;
+}
+
+function historyCell(routeName: string, sequence: number): HistoryBucket | null {
+  const payload = readHistoryPayload(window.__HISTORY__);
+  if (!payload) return null;
+  const route = payload.routes[routeName];
+  if (!route) return null;
+  const { bucket, weekend } = currentSeoulBucket();
+  return (weekend ? route.weekend : route.weekday)[String(sequence)]?.[String(bucket)] ?? null;
+}
+
+function fullRate(cell: HistoryBucket): number {
+  return cell.samples > 0 ? cell.zeroCount / cell.samples : 0;
+}
+
+type Recommendation =
+  | { kind: 'unset' }
+  | { kind: 'elsewhere' }
+  | { kind: 'insufficient'; samples: number }
+  | { kind: 'stay'; rate: number; samples: number }
+  | { kind: 'move'; target: DisplayStop; hops: number; myRate: number; targetRate: number }
+  | { kind: 'no-candidate'; rate: number };
+
+function recommendationFor(route: LatestRoute): Recommendation {
+  if (!boardingStop) return { kind: 'unset' };
+  if (boardingStop.routeName !== route.route.name) return { kind: 'elsewhere' };
+  const hasDirections = route.turnSequence !== null;
+  const stops = hasDirections ? route.stops.filter((stop) => stop.direction === selection.direction) : route.stops;
+  const myIndex = stops.findIndex((stop) => stop.sequence === boardingStop?.sequence);
+  if (myIndex === -1) return { kind: 'elsewhere' };
+  const myCell = historyCell(route.route.name, boardingStop.sequence);
+  if (!myCell || myCell.samples < recommendationMinSamples) return { kind: 'insufficient', samples: myCell?.samples ?? 0 };
+  const myRate = fullRate(myCell);
+  if (myRate < moveThreshold) return { kind: 'stay', rate: myRate, samples: myCell.samples };
+  for (let index = myIndex - 1; index >= 0; index -= 1) {
+    const candidate = stops[index];
+    if (!candidate) continue;
+    const cell = historyCell(route.route.name, candidate.sequence);
+    if (!cell || cell.samples < recommendationMinSamples) continue;
+    if (fullRate(cell) < candidateThreshold) {
+      return { kind: 'move', target: candidate, hops: myIndex - index, myRate, targetRate: fullRate(cell) };
+    }
+  }
+  return { kind: 'no-candidate', rate: myRate };
+}
+
+function recommendationText(recommendation: Recommendation): string {
+  switch (recommendation.kind) {
+    case 'unset': return '정류장의 길찾기를 눌러 "이 정류장에서 타요"를 선택하면 추천이 시작됩니다.';
+    case 'elsewhere': return '내 정류장이 이 노선·방향에 없습니다. 노선이나 방향을 바꿔보세요.';
+    case 'insufficient': return `데이터 부족 — 이 시간대 관측 ${recommendation.samples}회 (기준 ${recommendationMinSamples}회). 수집이 쌓이면 자동으로 추천이 켜집니다.`;
+    case 'stay': return `여기서 기다리세요 — 이 시간대 만석 빈도 ${Math.round(recommendation.rate * 100)}% (관측 ${recommendation.samples}회).`;
+    case 'move': return `${recommendation.hops}정거장 앞 ${recommendation.target.name ?? `정류장 ${recommendation.target.sequence}`}에서 타세요 — 내 정류장 만석 ${Math.round(recommendation.myRate * 100)}%, 그곳은 ${Math.round(recommendation.targetRate * 100)}%.`;
+    case 'no-candidate': return `만석 빈도 ${Math.round(recommendation.rate * 100)}% — 상류에 표본이 충분한 여유 정류장이 아직 없습니다.`;
+  }
+}
+
+function readRecords(): BoardingRecord[] {
+  try {
+    const raw = localStorage.getItem('bus-boarding-records');
+    const value = raw ? JSON.parse(raw) as unknown : [];
+    if (!Array.isArray(value)) return [];
+    return value.filter((entry): entry is BoardingRecord => isRecord(entry) && typeof entry.date === 'string' && typeof entry.result === 'string');
+  } catch {
+    return [];
+  }
+}
+
 // 카카오맵 오픈 API에는 대중교통 길찾기가 없어 링크로 위임한다.
 // 스킴 브리지는 앱·모바일웹·데스크톱 모두에서 by=publictransit을 유지한다.
 // map.kakao.com/link/* 웹 링크는 교통수단 파라미터가 없어 자가용으로 열리므로 쓰지 않는다.
@@ -281,6 +400,57 @@ function renderDestinationChip(): void {
   }
 }
 
+function renderRecordList(): void {
+  const list = getElement<HTMLPreElement>('record-list');
+  const records = readRecords();
+  getElement<HTMLSpanElement>('record-count').textContent = `${records.length}건`;
+  list.textContent = records.length === 0
+    ? '아직 기록이 없습니다. 매일 아침 결과를 남기면 추천 vs 경험칙 판정의 채점표가 됩니다.'
+    : records.slice(-3).reverse().map((entry) => `${entry.date} · ${entry.result} · 추천 ${entry.followed} · 경험칙 "${entry.intuition}"`).join('\n');
+}
+
+function renderRecommendation(route: LatestRoute): void {
+  const card = getElement<HTMLDivElement>('recommendation');
+  card.replaceChildren();
+  const recommendation = recommendationFor(route);
+  card.className = `reco ${recommendation.kind}`;
+  const title = document.createElement('div');
+  title.className = 'reco-title';
+  title.textContent = `탑승 추천 · ${bucketLabel(currentSeoulBucket().bucket)} 시간대`;
+  const body = document.createElement('p');
+  body.className = 'reco-body';
+  body.textContent = recommendationText(recommendation);
+  card.append(title, body);
+
+  const actions = document.createElement('div');
+  actions.className = 'reco-actions';
+  if (boardingStop) {
+    const stopChip = document.createElement('button');
+    stopChip.type = 'button';
+    stopChip.className = 'reco-stop';
+    stopChip.textContent = `내 정류장 ${boardingStop.name} ✕`;
+    stopChip.addEventListener('click', () => {
+      boardingStop = null;
+      localStorage.removeItem('bus-boarding-stop');
+      render();
+    });
+    actions.append(stopChip);
+  }
+  const recordToggle = document.createElement('button');
+  recordToggle.type = 'button';
+  recordToggle.className = 'reco-record-toggle';
+  recordToggle.textContent = recordFormOpen ? '기록 닫기' : '오늘 아침 기록';
+  recordToggle.addEventListener('click', () => {
+    recordFormOpen = !recordFormOpen;
+    render();
+  });
+  actions.append(recordToggle);
+  card.append(actions);
+
+  getElement<HTMLDivElement>('record-section').classList.toggle('show', recordFormOpen);
+  if (recordFormOpen) renderRecordList();
+}
+
 function nextVehicleFor(stopSequence: number, vehicles: DisplayVehicle[]): DisplayVehicle | null {
   return vehicles
     .filter((vehicle) => vehicle.stationSeq !== null && vehicle.stationSeq <= stopSequence)
@@ -316,6 +486,12 @@ function renderAxis(route: LatestRoute): void {
     if (stop.isTurn) {
       const marker = document.createElement('small');
       marker.textContent = '회차 지점';
+      name.append(marker);
+    }
+    if (boardingStop && boardingStop.routeName === route.route.name && boardingStop.sequence === stop.sequence) {
+      row.classList.add('mine');
+      const marker = document.createElement('small');
+      marker.textContent = '내 정류장';
       name.append(marker);
     }
     row.append(dot, name);
@@ -359,6 +535,17 @@ function renderAxis(route: LatestRoute): void {
         secondLeg.textContent = `여기서 ${destination}까지`;
         panel.append(secondLeg);
       }
+      const boardHere = document.createElement('button');
+      boardHere.type = 'button';
+      boardHere.className = 'panel-board-here';
+      boardHere.textContent = '이 정류장에서 타요 (추천 기준)';
+      boardHere.addEventListener('click', () => {
+        boardingStop = { routeName: route.route.name, direction: stop.direction, sequence: stop.sequence, name: stop.name ?? `정류장 ${stop.sequence}` };
+        localStorage.setItem('bus-boarding-stop', JSON.stringify(boardingStop));
+        expandedStopSequence = null;
+        render();
+      });
+      panel.append(boardHere);
       axis.append(panel);
     }
   });
@@ -379,6 +566,7 @@ function render(): void {
   renderFreshness(state.route);
   renderRouteTabs(payload, state.route);
   renderDirectionTabs(state.route);
+  renderRecommendation(state.route);
   getElement<HTMLParagraphElement>('route-endpoints').textContent = state.route.route.startStationName && state.route.route.endStationName
     ? `${state.route.route.startStationName} ↔ ${state.route.route.endStationName}`
     : '';
@@ -420,6 +608,23 @@ getElement<HTMLFormElement>('destination-form').addEventListener('submit', (even
 getElement<HTMLButtonElement>('destination-skip').addEventListener('click', () => {
   destinationSkipped = true;
   render();
+});
+
+getElement<HTMLFormElement>('record-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const state = boardState();
+  if (state.kind !== 'ready') return;
+  const records = readRecords();
+  records.push({
+    date: new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10),
+    recommendation: recommendationText(recommendationFor(state.route)),
+    intuition: getElement<HTMLInputElement>('record-intuition').value.trim(),
+    followed: getElement<HTMLSelectElement>('record-followed').value,
+    result: getElement<HTMLSelectElement>('record-result').value,
+  });
+  localStorage.setItem('bus-boarding-records', JSON.stringify(records));
+  getElement<HTMLInputElement>('record-intuition').value = '';
+  renderRecordList();
 });
 
 getElement<HTMLButtonElement>('destination-chip').addEventListener('click', () => {
