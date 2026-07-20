@@ -73,6 +73,23 @@ export interface LatestPayload {
   routes: LatestRoute[];
 }
 
+export interface HistoryBucket {
+  samples: number;
+  zeroCount: number;
+}
+
+export type HistoryBuckets = Record<string, Record<string, HistoryBucket>>;
+
+export interface HistoryRoute {
+  weekday: HistoryBuckets;
+  weekend: HistoryBuckets;
+}
+
+export interface HistoryPayload {
+  generatedAt: string;
+  routes: Record<string, HistoryRoute>;
+}
+
 export interface SeatBucket {
   samples: number;
   minSeats: number | null;
@@ -221,6 +238,35 @@ function readLatestRoute(value: unknown): LatestRoute | null {
     stops: asList(value.stops).map(readDisplayStop).filter((stop): stop is DisplayStop => stop !== null),
     vehicles: asList(value.vehicles).map(readDisplayVehicle).filter((vehicle): vehicle is DisplayVehicle => vehicle !== null),
   };
+}
+
+function readHistoryBuckets(value: unknown): HistoryBuckets {
+  if (!isRecord(value)) return {};
+  const buckets: HistoryBuckets = {};
+  for (const [sequenceKey, hours] of Object.entries(value)) {
+    if (!isRecord(hours)) continue;
+    buckets[sequenceKey] = {};
+    for (const [bucketKey, bucket] of Object.entries(hours)) {
+      if (!isRecord(bucket)) continue;
+      const samples = readNumber(bucket.samples);
+      const zeroCount = readNumber(bucket.zeroCount);
+      if (samples === null || zeroCount === null) continue;
+      buckets[sequenceKey][bucketKey] = { samples, zeroCount };
+    }
+  }
+  return buckets;
+}
+
+export function readHistoryPayload(value: unknown): HistoryPayload | null {
+  if (!isRecord(value)) return null;
+  const generatedAt = readString(value.generatedAt);
+  if (!generatedAt || !isRecord(value.routes)) return null;
+  const routes: Record<string, HistoryRoute> = {};
+  for (const [routeName, entry] of Object.entries(value.routes)) {
+    if (!isRecord(entry)) continue;
+    routes[routeName] = { weekday: readHistoryBuckets(entry.weekday), weekend: readHistoryBuckets(entry.weekend) };
+  }
+  return { generatedAt, routes };
 }
 
 export function readLatestPayload(value: unknown): LatestPayload | null {
