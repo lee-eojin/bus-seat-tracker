@@ -209,7 +209,7 @@ function renderAxis(route: LatestRoute): void {
     for (const vehicle of vehicles.filter((candidate) => candidate.stationSeq === stop.sequence)) {
       const pill = document.createElement('span');
       pill.className = `vehicle ${seatState(vehicle)}`;
-      pill.textContent = `${vehicle.id ?? '차량'} · ${seatLabel(vehicle)}`;
+      pill.textContent = seatLabel(vehicle);
       row.append(pill);
     }
     const routeHref = kakaoRouteHref(stop);
