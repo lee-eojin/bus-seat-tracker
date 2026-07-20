@@ -1,8 +1,9 @@
-import { readLatestPayload, type Direction, type DisplayStop, type DisplayVehicle, type LatestPayload, type LatestRoute, type SeatState } from '../shared/model.js';
+import { asList, isRecord, readLatestPayload, readNumber, type Direction, type DisplayStop, type DisplayVehicle, type LatestPayload, type LatestRoute, type SeatState } from '../shared/model.js';
 
 declare global {
   interface Window {
     __LATEST__?: unknown;
+    __CONFIG__?: unknown;
   }
 }
 
@@ -15,7 +16,20 @@ type BoardState =
   | { kind: 'empty' }
   | { kind: 'ready'; route: LatestRoute };
 
+interface LiveOverlay {
+  routeId: string | null;
+  vehicles: DisplayVehicle[];
+  fetchedAt: number | null;
+}
+
+const liveApiUrl = 'https://apis.data.go.kr/6410000/buslocationservice/v2/getBusLocationListv2';
+const liveFreshLimit = 180_000;
+
 let selection: Selection = { routeName: null, direction: 'up' };
+let destination = localStorage.getItem('bus-destination');
+let destinationSkipped = false;
+let expandedStopSequence: number | null = null;
+let live: LiveOverlay = { routeId: null, vehicles: [], fetchedAt: null };
 
 function getElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -89,11 +103,116 @@ function setBanner(message: string | null): void {
   if (message) banner.textContent = message;
 }
 
+function liveApiKey(): string | null {
+  const config = window.__CONFIG__;
+  if (!isRecord(config)) return null;
+  return typeof config.gbisApiKey === 'string' && config.gbisApiKey.length > 0 ? config.gbisApiKey : null;
+}
+
+function liveIsFresh(route: LatestRoute): boolean {
+  return live.routeId === route.route.id && live.fetchedAt !== null && Date.now() - live.fetchedAt < liveFreshLimit;
+}
+
+function directionOf(sequence: number | null, turnSequence: number | null): Direction | null {
+  if (sequence === null || turnSequence === null) return null;
+  return sequence <= turnSequence ? 'up' : 'down';
+}
+
+// 라이브 응답의 차량번호(plateNo)는 읽지도 저장하지도 않는다 — 공개 정책과 동일 기준.
+function readLiveVehicles(payload: unknown, turnSequence: number | null): DisplayVehicle[] {
+  if (!isRecord(payload)) return [];
+  const response = isRecord(payload.response) ? payload.response : payload;
+  const body = isRecord(response.msgBody) ? response.msgBody : null;
+  return asList(body ? body.busLocationList : undefined).flatMap((value) => {
+    if (!isRecord(value)) return [];
+    const stationSeq = readNumber(value.stationSeq);
+    return [{
+      id: null,
+      stationSeq,
+      remainingSeats: readNumber(value.remainSeatCnt),
+      crowded: readNumber(value.crowded),
+      status: readNumber(value.stateCd),
+      direction: directionOf(stationSeq, turnSequence),
+    }];
+  });
+}
+
+async function refreshLiveVehicles(): Promise<void> {
+  const apiKey = liveApiKey();
+  const state = boardState();
+  if (!apiKey || state.kind !== 'ready') return;
+  const route = state.route;
+  const requestUrl = new URL(liveApiUrl);
+  requestUrl.search = new URLSearchParams({ serviceKey: apiKey, format: 'json', routeId: route.route.id }).toString();
+  try {
+    const response = await fetch(requestUrl, { signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error(`상태 ${response.status}`);
+    live = {
+      routeId: route.route.id,
+      vehicles: readLiveVehicles(await response.json() as unknown, route.turnSequence),
+      fetchedAt: Date.now(),
+    };
+    render();
+  } catch (error: unknown) {
+    console.warn(`실시간 좌석 조회 실패, 스냅샷으로 표시합니다: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+// 카카오맵 오픈 API에는 대중교통 길찾기가 없어 링크로 위임한다.
+// 터치 기기는 앱·모바일웹 겸용 스킴 브리지, 그 외에는 웹 지도 링크.
+function kakaoRouteHref(stop: DisplayStop): string | null {
+  if (stop.latitude === null || stop.longitude === null) return null;
+  const destinationPoint = `${stop.latitude},${stop.longitude}`;
+  if (matchMedia('(pointer: coarse)').matches) {
+    return `https://m.map.kakao.com/scheme/route?ep=${destinationPoint}&by=publictransit`;
+  }
+  return `https://map.kakao.com/link/to/${encodeURIComponent(stop.name ?? '정류장')},${destinationPoint}`;
+}
+
+function normalizeStopName(name: string): string {
+  return name.replace(/\s/g, '');
+}
+
+// 도착지가 수집 노선의 정류장과 이름이 겹치면 좌표를 얻어 정확한 경로 링크를 만든다.
+function findDestinationStop(): DisplayStop | null {
+  if (!destination) return null;
+  const payload = latestPayload();
+  if (!payload) return null;
+  const target = normalizeStopName(destination);
+  if (target.length === 0) return null;
+  for (const entry of payload.routes) {
+    const found = entry.stops.find((stop) => stop.name !== null && stop.latitude !== null && normalizeStopName(stop.name).includes(target));
+    if (found) return found;
+  }
+  return null;
+}
+
+function destinationLegHref(stop: DisplayStop): string | null {
+  if (!destination || stop.latitude === null || stop.longitude === null) return null;
+  const target = findDestinationStop();
+  if (!target || target.latitude === null || target.longitude === null) {
+    return `https://map.kakao.com/link/search/${encodeURIComponent(destination)}`;
+  }
+  if (matchMedia('(pointer: coarse)').matches) {
+    return `https://m.map.kakao.com/scheme/route?sp=${stop.latitude},${stop.longitude}&ep=${target.latitude},${target.longitude}&by=publictransit`;
+  }
+  const from = `${encodeURIComponent(stop.name ?? '정류장')},${stop.latitude},${stop.longitude}`;
+  const to = `${encodeURIComponent(destination)},${target.latitude},${target.longitude}`;
+  return `https://map.kakao.com/link/from/${from}/to/${to}`;
+}
+
 function renderFreshness(route: LatestRoute): void {
   const badge = getElement<HTMLDivElement>('freshness');
   const label = getElement<HTMLSpanElement>('freshness-text');
-  const minutes = minutesSince(route.collectedAt);
   badge.className = 'freshness';
+  if (liveIsFresh(route) && live.fetchedAt !== null) {
+    const seconds = Math.round((Date.now() - live.fetchedAt) / 1000);
+    badge.classList.add('ok');
+    label.textContent = `실시간 · ${seconds < 5 ? '방금' : `${seconds}초 전`} 조회`;
+    setBanner(null);
+    return;
+  }
+  const minutes = minutesSince(route.collectedAt);
   if (minutes === null) {
     badge.classList.add('bad');
     label.textContent = '스냅샷 없음';
@@ -127,7 +246,9 @@ function renderRouteTabs(payload: LatestPayload, route: LatestRoute): void {
     tab.textContent = entry.route.name;
     tab.addEventListener('click', () => {
       selection.routeName = entry.route.name;
+      expandedStopSequence = null;
       render();
+      void refreshLiveVehicles();
     });
     return tab;
   }));
@@ -150,6 +271,7 @@ function renderDirectionTabs(route: LatestRoute): void {
     tab.textContent = labels[direction];
     tab.addEventListener('click', () => {
       selection.direction = direction;
+      expandedStopSequence = null;
       writeHash(route);
       render();
     });
@@ -157,15 +279,14 @@ function renderDirectionTabs(route: LatestRoute): void {
   }));
 }
 
-// 카카오맵 오픈 API에는 대중교통 길찾기가 없어 링크로 위임한다.
-// 터치 기기는 앱·모바일웹 겸용 스킴 브리지, 그 외에는 웹 지도 링크.
-function kakaoRouteHref(stop: DisplayStop): string | null {
-  if (stop.latitude === null || stop.longitude === null) return null;
-  const destination = `${stop.latitude},${stop.longitude}`;
-  if (matchMedia('(pointer: coarse)').matches) {
-    return `https://m.map.kakao.com/scheme/route?ep=${destination}&by=publictransit`;
+function renderDestinationChip(): void {
+  const chip = getElement<HTMLButtonElement>('destination-chip');
+  if (destination) {
+    chip.hidden = false;
+    chip.textContent = `도착지 ${destination} ✕`;
+  } else {
+    chip.hidden = true;
   }
-  return `https://map.kakao.com/link/to/${encodeURIComponent(stop.name ?? '정류장')},${destination}`;
 }
 
 function nextVehicleFor(stopSequence: number, vehicles: DisplayVehicle[]): DisplayVehicle | null {
@@ -179,7 +300,8 @@ function renderAxis(route: LatestRoute): void {
   axis.replaceChildren();
   const hasDirections = route.turnSequence !== null;
   const stops = hasDirections ? route.stops.filter((stop) => stop.direction === selection.direction) : route.stops;
-  const vehicles = hasDirections ? route.vehicles.filter((vehicle) => vehicle.direction === selection.direction) : route.vehicles;
+  const routeVehicles = liveIsFresh(route) ? live.vehicles : route.vehicles;
+  const vehicles = hasDirections ? routeVehicles.filter((vehicle) => vehicle.direction === selection.direction) : routeVehicles;
   if (vehicles.length === 0) {
     const note = document.createElement('div');
     note.className = 'empty-note';
@@ -214,23 +336,50 @@ function renderAxis(route: LatestRoute): void {
     }
     const routeHref = kakaoRouteHref(stop);
     if (routeHref) {
-      const link = document.createElement('a');
-      link.className = 'stop-route-link';
-      link.href = routeHref;
-      link.target = '_blank';
-      link.rel = 'noreferrer';
-      link.textContent = '길찾기';
-      row.append(link);
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'stop-route-link';
+      toggle.textContent = '길찾기';
+      toggle.setAttribute('aria-expanded', String(expandedStopSequence === stop.sequence));
+      toggle.addEventListener('click', () => {
+        expandedStopSequence = expandedStopSequence === stop.sequence ? null : stop.sequence;
+        render();
+      });
+      row.append(toggle);
     }
     axis.append(row);
+
+    if (routeHref && expandedStopSequence === stop.sequence) {
+      const panel = document.createElement('div');
+      panel.className = 'route-panel';
+      const firstLeg = document.createElement('a');
+      firstLeg.href = routeHref;
+      firstLeg.target = '_blank';
+      firstLeg.rel = 'noreferrer';
+      firstLeg.textContent = '이 정류장까지';
+      panel.append(firstLeg);
+      const secondHref = destinationLegHref(stop);
+      if (secondHref) {
+        const secondLeg = document.createElement('a');
+        secondLeg.href = secondHref;
+        secondLeg.target = '_blank';
+        secondLeg.rel = 'noreferrer';
+        secondLeg.textContent = `여기서 ${destination}까지`;
+        panel.append(secondLeg);
+      }
+      axis.append(panel);
+    }
   });
 }
 
 function render(): void {
   const state = boardState();
+  const needsDestination = state.kind === 'ready' && destination === null && !destinationSkipped;
   getElement<HTMLDivElement>('setup').classList.toggle('show', state.kind === 'empty');
-  getElement<HTMLDivElement>('board').classList.toggle('show', state.kind === 'ready');
-  if (state.kind === 'empty') return;
+  getElement<HTMLDivElement>('destination-screen').classList.toggle('show', needsDestination);
+  getElement<HTMLDivElement>('board').classList.toggle('show', state.kind === 'ready' && !needsDestination);
+  renderDestinationChip();
+  if (state.kind === 'empty' || needsDestination) return;
 
   const payload = latestPayload();
   if (!payload) return;
@@ -255,6 +404,39 @@ function reloadData(): void {
   document.body.append(script);
 }
 
+function loadLiveConfig(): void {
+  const script = document.createElement('script');
+  script.src = `data/config.js?v=${Date.now()}`;
+  script.addEventListener('load', () => {
+    script.remove();
+    void refreshLiveVehicles();
+  });
+  script.addEventListener('error', () => script.remove());
+  document.body.append(script);
+}
+
+getElement<HTMLFormElement>('destination-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const input = getElement<HTMLInputElement>('destination-input');
+  const value = input.value.trim();
+  if (!value) return;
+  destination = value;
+  localStorage.setItem('bus-destination', value);
+  render();
+});
+
+getElement<HTMLButtonElement>('destination-skip').addEventListener('click', () => {
+  destinationSkipped = true;
+  render();
+});
+
+getElement<HTMLButtonElement>('destination-chip').addEventListener('click', () => {
+  destination = null;
+  destinationSkipped = false;
+  localStorage.removeItem('bus-destination');
+  render();
+});
+
 window.addEventListener('hashchange', () => {
   readHash();
   render();
@@ -262,7 +444,9 @@ window.addEventListener('hashchange', () => {
 
 readHash();
 render();
+loadLiveConfig();
 setInterval(reloadData, 60_000);
+setInterval(() => void refreshLiveVehicles(), 60_000);
 setInterval(() => {
   const state = boardState();
   if (state.kind === 'ready') renderFreshness(state.route);
