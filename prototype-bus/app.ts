@@ -39,6 +39,8 @@ interface BoardingRecord {
   intuition: string;
   followed: string;
   result: string;
+  waitingCount: number | null;
+  alightingCount: number | null;
 }
 
 let selection: Selection = { routeName: null, direction: 'up' };
@@ -294,7 +296,9 @@ function readRecords(): BoardingRecord[] {
     const raw = localStorage.getItem('bus-boarding-records');
     const value = raw ? JSON.parse(raw) as unknown : [];
     if (!Array.isArray(value)) return [];
-    return value.filter((entry): entry is BoardingRecord => isRecord(entry) && typeof entry.date === 'string' && typeof entry.result === 'string');
+    return value
+      .filter((entry): entry is BoardingRecord => isRecord(entry) && typeof entry.date === 'string' && typeof entry.result === 'string')
+      .map((entry) => ({ ...entry, waitingCount: readNumber(entry.waitingCount), alightingCount: readNumber(entry.alightingCount) }));
   } catch {
     return [];
   }
@@ -429,7 +433,12 @@ function renderRecordList(): void {
   getElement<HTMLSpanElement>('record-count').textContent = `${records.length}건`;
   list.textContent = records.length === 0
     ? '아직 기록이 없습니다. 매일 아침 결과를 남기면 추천 vs 경험칙 판정의 채점표가 됩니다.'
-    : records.slice(-3).reverse().map((entry) => `${entry.date} · ${entry.result} · 추천 ${entry.followed} · 경험칙 "${entry.intuition}"`).join('\n');
+    : records.slice(-3).reverse().map((entry) => {
+      const counts = entry.waitingCount !== null || entry.alightingCount !== null
+        ? ` · 대기 ${entry.waitingCount ?? '?'} 하차 ${entry.alightingCount ?? '?'}`
+        : '';
+      return `${entry.date} · ${entry.result} · 추천 ${entry.followed}${counts} · 경험칙 "${entry.intuition}"`;
+    }).join('\n');
 }
 
 function renderRecommendation(route: LatestRoute): void {
@@ -652,9 +661,13 @@ getElement<HTMLFormElement>('record-form').addEventListener('submit', (event) =>
     intuition: getElement<HTMLInputElement>('record-intuition').value.trim(),
     followed: getElement<HTMLSelectElement>('record-followed').value,
     result: getElement<HTMLSelectElement>('record-result').value,
+    waitingCount: readNumber(getElement<HTMLInputElement>('record-waiting').value),
+    alightingCount: readNumber(getElement<HTMLInputElement>('record-alighting').value),
   });
   localStorage.setItem('bus-boarding-records', JSON.stringify(records));
   getElement<HTMLInputElement>('record-intuition').value = '';
+  getElement<HTMLInputElement>('record-waiting').value = '';
+  getElement<HTMLInputElement>('record-alighting').value = '';
   renderRecordList();
 });
 
