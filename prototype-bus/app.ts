@@ -224,13 +224,32 @@ function fullRate(cell: HistoryBucket): number {
   return cell.samples > 0 ? cell.zeroCount / cell.samples : 0;
 }
 
+function boardingProbability(cell: HistoryBucket): number {
+  return 1 - fullRate(cell);
+}
+
+// Wilson score 95% 구간 — 표본이 적을 때 단순 비율보다 보수적으로 보여준다.
+function wilsonInterval(successes: number, trials: number): { low: number; high: number } {
+  if (trials === 0) return { low: 0, high: 1 };
+  const z = 1.96;
+  const rate = successes / trials;
+  const denominator = 1 + (z * z) / trials;
+  const center = (rate + (z * z) / (2 * trials)) / denominator;
+  const spread = (z * Math.sqrt((rate * (1 - rate)) / trials + (z * z) / (4 * trials * trials))) / denominator;
+  return { low: Math.max(0, center - spread), high: Math.min(1, center + spread) };
+}
+
+function percent(value: number): number {
+  return Math.round(value * 100);
+}
+
 type Recommendation =
   | { kind: 'unset' }
   | { kind: 'elsewhere' }
   | { kind: 'insufficient'; samples: number }
-  | { kind: 'stay'; rate: number; samples: number }
-  | { kind: 'move'; target: DisplayStop; hops: number; myRate: number; targetRate: number }
-  | { kind: 'no-candidate'; rate: number };
+  | { kind: 'stay'; cell: HistoryBucket }
+  | { kind: 'move'; target: DisplayStop; hops: number; myCell: HistoryBucket; targetCell: HistoryBucket }
+  | { kind: 'no-candidate'; cell: HistoryBucket };
 
 function recommendationFor(route: LatestRoute): Recommendation {
   if (!boardingStop) return { kind: 'unset' };
@@ -241,18 +260,22 @@ function recommendationFor(route: LatestRoute): Recommendation {
   if (myIndex === -1) return { kind: 'elsewhere' };
   const myCell = historyCell(route.route.name, boardingStop.sequence);
   if (!myCell || myCell.samples < recommendationMinSamples) return { kind: 'insufficient', samples: myCell?.samples ?? 0 };
-  const myRate = fullRate(myCell);
-  if (myRate < moveThreshold) return { kind: 'stay', rate: myRate, samples: myCell.samples };
+  if (fullRate(myCell) < moveThreshold) return { kind: 'stay', cell: myCell };
   for (let index = myIndex - 1; index >= 0; index -= 1) {
     const candidate = stops[index];
     if (!candidate) continue;
     const cell = historyCell(route.route.name, candidate.sequence);
     if (!cell || cell.samples < recommendationMinSamples) continue;
     if (fullRate(cell) < candidateThreshold) {
-      return { kind: 'move', target: candidate, hops: myIndex - index, myRate, targetRate: fullRate(cell) };
+      return { kind: 'move', target: candidate, hops: myIndex - index, myCell, targetCell: cell };
     }
   }
-  return { kind: 'no-candidate', rate: myRate };
+  return { kind: 'no-candidate', cell: myCell };
+}
+
+function probabilityPhrase(cell: HistoryBucket): string {
+  const interval = wilsonInterval(cell.samples - cell.zeroCount, cell.samples);
+  return `탑승 확률 ${percent(boardingProbability(cell))}% (관측 ${cell.samples}회, 95% 구간 ${percent(interval.low)}~${percent(interval.high)}%)`;
 }
 
 function recommendationText(recommendation: Recommendation): string {
@@ -260,9 +283,9 @@ function recommendationText(recommendation: Recommendation): string {
     case 'unset': return '정류장의 길찾기를 눌러 "이 정류장에서 타요"를 선택하면 추천이 시작됩니다.';
     case 'elsewhere': return '내 정류장이 이 노선·방향에 없습니다. 노선이나 방향을 바꿔보세요.';
     case 'insufficient': return `데이터 부족 — 이 시간대 관측 ${recommendation.samples}회 (기준 ${recommendationMinSamples}회). 수집이 쌓이면 자동으로 추천이 켜집니다.`;
-    case 'stay': return `여기서 기다리세요 — 이 시간대 만석 빈도 ${Math.round(recommendation.rate * 100)}% (관측 ${recommendation.samples}회).`;
-    case 'move': return `${recommendation.hops}정거장 앞 ${recommendation.target.name ?? `정류장 ${recommendation.target.sequence}`}에서 타세요 — 내 정류장 만석 ${Math.round(recommendation.myRate * 100)}%, 그곳은 ${Math.round(recommendation.targetRate * 100)}%.`;
-    case 'no-candidate': return `만석 빈도 ${Math.round(recommendation.rate * 100)}% — 상류에 표본이 충분한 여유 정류장이 아직 없습니다.`;
+    case 'stay': return `여기서 기다리세요. 이 시간대 ${probabilityPhrase(recommendation.cell)}.`;
+    case 'move': return `${recommendation.hops}정거장 앞 ${recommendation.target.name ?? `정류장 ${recommendation.target.sequence}`}에서 타세요. 내 정류장 ${probabilityPhrase(recommendation.myCell)}, 그곳은 탑승 확률 ${percent(boardingProbability(recommendation.targetCell))}% (관측 ${recommendation.targetCell.samples}회).`;
+    case 'no-candidate': return `${probabilityPhrase(recommendation.cell)}. 상류에 표본이 충분한 여유 정류장이 아직 없습니다.`;
   }
 }
 
@@ -495,6 +518,14 @@ function renderAxis(route: LatestRoute): void {
       name.append(marker);
     }
     row.append(dot, name);
+
+    const probabilityCell = historyCell(route.route.name, stop.sequence);
+    if (probabilityCell && probabilityCell.samples >= recommendationMinSamples) {
+      const probability = document.createElement('span');
+      probability.className = 'stop-prob';
+      probability.textContent = `탑승 ${percent(boardingProbability(probabilityCell))}%`;
+      row.append(probability);
+    }
 
     for (const vehicle of vehicles.filter((candidate) => candidate.stationSeq === stop.sequence)) {
       const pill = document.createElement('span');
