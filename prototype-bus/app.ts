@@ -1,4 +1,4 @@
-import { asList, isRecord, readHistoryPayload, readLatestPayload, readNumber, type Direction, type DisplayStop, type DisplayVehicle, type HistoryBucket, type LatestPayload, type LatestRoute, type SeatState } from '../shared/model.js';
+import { asList, isRecord, readHistoryPayload, readIdentifier, readLatestPayload, readNumber, type Direction, type DisplayStop, type DisplayVehicle, type HistoryBucket, type LatestPayload, type LatestRoute, type SeatState } from '../shared/model.js';
 
 declare global {
   interface Window {
@@ -25,6 +25,8 @@ interface LiveOverlay {
 
 const liveApiUrl = 'https://apis.data.go.kr/6410000/buslocationservice/v2/getBusLocationListv2';
 const liveFreshLimit = 180_000;
+const livePollIntervalMs = 30_000;
+const phase0LogLimit = 600;
 
 interface BoardingStop {
   routeName: string;
@@ -41,6 +43,9 @@ interface BoardingRecord {
   result: string;
   waitingCount: number | null;
   alightingCount: number | null;
+  userArrivedAt: string | null;
+  busArrivedAt: string | null;
+  fieldNote: string | null;
 }
 
 let selection: Selection = { routeName: null, direction: 'up' };
@@ -174,6 +179,43 @@ function readLiveVehicles(payload: unknown, turnSequence: number | null): Displa
   });
 }
 
+function readApiQueryTime(payload: unknown): string | null {
+  if (!isRecord(payload)) return null;
+  const response = isRecord(payload.response) ? payload.response : payload;
+  const header = isRecord(response.msgHeader) ? response.msgHeader : null;
+  return header ? readIdentifier(header.queryTime) : null;
+}
+
+// GBIS queryTime은 KST 벽시계 문자열이다 (예: 2026-07-21 17:38:11.123)
+function parseApiQueryTime(value: string | null): number | null {
+  if (!value) return null;
+  const time = new Date(`${value.replace(' ', 'T')}+09:00`).getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+// Phase 0 관측 로그 (v2 §10.1): 수집 방식·페이지 활성·응답 지연을 관측과 함께 남긴다.
+function appendPhase0Observation(route: LatestRoute, vehicles: DisplayVehicle[], apiQueryTime: string | null): void {
+  try {
+    const raw = localStorage.getItem('phase0-observations');
+    const parsed = raw ? JSON.parse(raw) as unknown : [];
+    const log = Array.isArray(parsed) ? parsed : [];
+    const queryMillis = parseApiQueryTime(apiQueryTime);
+    log.push({
+      observedAt: new Date().toISOString(),
+      apiQueryTime,
+      responseAgeMs: queryMillis === null ? null : Date.now() - queryMillis,
+      routeId: route.route.id,
+      routeName: route.route.name,
+      collectionMode: 'live-30s',
+      pageActive: document.visibilityState === 'visible',
+      vehicles: vehicles.map((vehicle) => ({ seq: vehicle.stationSeq, seats: vehicle.remainingSeats })),
+    });
+    localStorage.setItem('phase0-observations', JSON.stringify(log.slice(-phase0LogLimit)));
+  } catch {
+    // 로그 저장 실패가 화면 동작을 막지 않는다
+  }
+}
+
 async function refreshLiveVehicles(): Promise<void> {
   const apiKey = liveApiKey();
   const state = boardState();
@@ -184,11 +226,13 @@ async function refreshLiveVehicles(): Promise<void> {
   try {
     const response = await fetch(requestUrl, { signal: AbortSignal.timeout(10_000) });
     if (!response.ok) throw new Error(`상태 ${response.status}`);
+    const payload = await response.json() as unknown;
     live = {
       routeId: route.route.id,
-      vehicles: readLiveVehicles(await response.json() as unknown, route.turnSequence),
+      vehicles: readLiveVehicles(payload, route.turnSequence),
       fetchedAt: Date.now(),
     };
+    appendPhase0Observation(route, live.vehicles, readApiQueryTime(payload));
     render();
   } catch (error: unknown) {
     console.warn(`실시간 좌석 조회 실패, 스냅샷으로 표시합니다: ${error instanceof Error ? error.message : String(error)}`);
@@ -298,7 +342,14 @@ function readRecords(): BoardingRecord[] {
     if (!Array.isArray(value)) return [];
     return value
       .filter((entry): entry is BoardingRecord => isRecord(entry) && typeof entry.date === 'string' && typeof entry.result === 'string')
-      .map((entry) => ({ ...entry, waitingCount: readNumber(entry.waitingCount), alightingCount: readNumber(entry.alightingCount) }));
+      .map((entry) => ({
+        ...entry,
+        waitingCount: readNumber(entry.waitingCount),
+        alightingCount: readNumber(entry.alightingCount),
+        userArrivedAt: typeof entry.userArrivedAt === 'string' && entry.userArrivedAt ? entry.userArrivedAt : null,
+        busArrivedAt: typeof entry.busArrivedAt === 'string' && entry.busArrivedAt ? entry.busArrivedAt : null,
+        fieldNote: typeof entry.fieldNote === 'string' && entry.fieldNote ? entry.fieldNote : null,
+      }));
   } catch {
     return [];
   }
@@ -427,10 +478,21 @@ function renderDestinationChip(): void {
   }
 }
 
+function phase0ObservationCount(): number {
+  try {
+    const raw = localStorage.getItem('phase0-observations');
+    const parsed = raw ? JSON.parse(raw) as unknown : [];
+    return Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
 function renderRecordList(): void {
   const list = getElement<HTMLPreElement>('record-list');
   const records = readRecords();
   getElement<HTMLSpanElement>('record-count').textContent = `${records.length}건`;
+  getElement<HTMLSpanElement>('phase0-count').textContent = `${phase0ObservationCount()}건`;
   list.textContent = records.length === 0
     ? '아직 기록이 없습니다. 매일 아침 결과를 남기면 추천 vs 경험칙 판정의 채점표가 됩니다.'
     : records.slice(-3).reverse().map((entry) => {
@@ -645,6 +707,20 @@ getElement<HTMLFormElement>('destination-form').addEventListener('submit', (even
   render();
 });
 
+getElement<HTMLButtonElement>('phase0-export').addEventListener('click', () => {
+  let observations: unknown = [];
+  let boardingRecords: unknown = [];
+  try { observations = JSON.parse(localStorage.getItem('phase0-observations') ?? '[]') as unknown; } catch { /* 손상된 로그는 빈 배열로 */ }
+  try { boardingRecords = JSON.parse(localStorage.getItem('bus-boarding-records') ?? '[]') as unknown; } catch { /* 동일 */ }
+  const bundle = { exportedAt: new Date().toISOString(), observations, boardingRecords };
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `phase0-${new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10)}.json`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+});
+
 getElement<HTMLButtonElement>('destination-skip').addEventListener('click', () => {
   destinationSkipped = true;
   render();
@@ -663,11 +739,14 @@ getElement<HTMLFormElement>('record-form').addEventListener('submit', (event) =>
     result: getElement<HTMLSelectElement>('record-result').value,
     waitingCount: readNumber(getElement<HTMLInputElement>('record-waiting').value),
     alightingCount: readNumber(getElement<HTMLInputElement>('record-alighting').value),
+    userArrivedAt: getElement<HTMLInputElement>('record-user-arrived').value || null,
+    busArrivedAt: getElement<HTMLInputElement>('record-bus-arrived').value || null,
+    fieldNote: getElement<HTMLInputElement>('record-field-note').value.trim() || null,
   });
   localStorage.setItem('bus-boarding-records', JSON.stringify(records));
-  getElement<HTMLInputElement>('record-intuition').value = '';
-  getElement<HTMLInputElement>('record-waiting').value = '';
-  getElement<HTMLInputElement>('record-alighting').value = '';
+  for (const id of ['record-intuition', 'record-waiting', 'record-alighting', 'record-user-arrived', 'record-bus-arrived', 'record-field-note']) {
+    getElement<HTMLInputElement>(id).value = '';
+  }
   renderRecordList();
 });
 
@@ -687,7 +766,13 @@ readHash();
 render();
 loadLiveConfig();
 setInterval(reloadData, 60_000);
-setInterval(() => void refreshLiveVehicles(), 60_000);
+// 라이브 폴링은 탭이 보일 때만 돈다 — 공유 API 키의 일일 쿼터 보호 (v2 §14.8)
+setInterval(() => {
+  if (document.visibilityState === 'visible') void refreshLiveVehicles();
+}, livePollIntervalMs);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void refreshLiveVehicles();
+});
 setInterval(() => {
   const state = boardState();
   if (state.kind === 'ready') renderFreshness(state.route);
