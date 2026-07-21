@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readRouteCache, readSnapshot, type DailyBuckets, type Direction, type HistoryRoute, type LatestPayload, type LatestRoute, type RouteCache, type Snapshot, type VehicleSnapshot } from '../shared/model.js';
+import { readRouteCache, readSnapshot, type DailyBuckets, type Direction, type HistoryRoute, type LatestPayload, type LatestRoute, type ProfileCell, type ProfileRoute, type RouteCache, type Snapshot, type VehicleSnapshot } from '../shared/model.js';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(currentDirectory, '..', '..');
@@ -248,7 +248,101 @@ async function buildHistoryRoute(snapshotFiles: string[]): Promise<HistoryRoute>
   return history;
 }
 
-async function writeGlobalScript(fileName: string, globalName: '__LATEST__' | '__DAILY__' | '__HISTORY__', payload: unknown): Promise<void> {
+interface VehicleObservation {
+  time: number;
+  sequence: number;
+  seats: number;
+  bucket: number;
+  weekend: boolean;
+}
+
+// 운행 분할 기준: 위치 역행(회차 후 재출발) 또는 45분 이상 공백(차고지 대기)
+const runSplitGapMs = 45 * 60_000;
+// 90분 넘게 벌어진 관측쌍은 순수요 귀속이 무의미해 버린다
+const pairMaxGapMs = 90 * 60_000;
+
+function splitRuns(observations: VehicleObservation[]): VehicleObservation[][] {
+  const runs: VehicleObservation[][] = [];
+  let run: VehicleObservation[] = [];
+  for (const observation of observations) {
+    const previous = run[run.length - 1];
+    if (previous && (observation.sequence < previous.sequence || observation.time - previous.time > runSplitGapMs)) {
+      runs.push(run);
+      run = [];
+    }
+    run.push(observation);
+  }
+  if (run.length > 0) runs.push(run);
+  return runs;
+}
+
+// 순수요 프로파일: 같은 운행의 연속 관측쌍에서 Δ좌석을 구간 정류장에 1/n 가중 배분.
+// 만석이 낀 쌍은 수요가 은닉되므로(검열) 표본에서 빼고 검열 가중치로만 센다.
+async function buildProfileRoute(snapshotFiles: string[]): Promise<ProfileRoute> {
+  const byVehicle = new Map<string, VehicleObservation[]>();
+  for (const filePath of snapshotFiles) {
+    for (const snapshot of parseSnapshots(await readFile(filePath, 'utf8'))) {
+      const seoul = toSeoulBucket(snapshot.collectedAt);
+      const time = new Date(snapshot.collectedAt).getTime();
+      for (const vehicle of snapshot.vehicles) {
+        if (vehicle.id === null || vehicle.currentStopSequence === null) continue;
+        if (vehicle.remainingSeats === null || vehicle.remainingSeats < 0) continue;
+        const observations = byVehicle.get(vehicle.id) ?? [];
+        observations.push({
+          time,
+          sequence: vehicle.currentStopSequence,
+          seats: vehicle.remainingSeats,
+          bucket: seoul.bucket,
+          weekend: seoul.weekend,
+        });
+        byVehicle.set(vehicle.id, observations);
+      }
+    }
+  }
+
+  const profile: ProfileRoute = { weekday: {}, weekend: {}, depletion: { weekday: {}, weekend: {} } };
+
+  for (const observations of byVehicle.values()) {
+    observations.sort((left, right) => left.time - right.time);
+    for (const run of splitRuns(observations)) {
+      const depleted = run.find((observation) => observation.seats === 0);
+      if (depleted) {
+        const group = depleted.weekend ? profile.depletion.weekend : profile.depletion.weekday;
+        const bySequence = group[String(depleted.bucket)] ?? {};
+        bySequence[String(depleted.sequence)] = (bySequence[String(depleted.sequence)] ?? 0) + 1;
+        group[String(depleted.bucket)] = bySequence;
+      }
+
+      for (let index = 1; index < run.length; index += 1) {
+        const from = run[index - 1];
+        const to = run[index];
+        if (!from || !to) continue;
+        const span = to.sequence - from.sequence;
+        if (span <= 0 || to.time - from.time > pairMaxGapMs) continue;
+        const censored = from.seats === 0 || to.seats === 0;
+        const weight = 1 / span;
+        const perStopDemand = (from.seats - to.seats) / span;
+        const group = to.weekend ? profile.weekend : profile.weekday;
+        for (let sequence = from.sequence + 1; sequence <= to.sequence; sequence += 1) {
+          const byBucket = group[String(sequence)] ?? {};
+          const cell: ProfileCell = byBucket[String(to.bucket)] ?? { weight: 0, demandSum: 0, demandSquaredSum: 0, censoredWeight: 0 };
+          if (censored) {
+            cell.censoredWeight += weight;
+          } else {
+            cell.weight += weight;
+            cell.demandSum += weight * perStopDemand;
+            cell.demandSquaredSum += weight * perStopDemand * perStopDemand;
+          }
+          byBucket[String(to.bucket)] = cell;
+          group[String(sequence)] = byBucket;
+        }
+      }
+    }
+  }
+  return profile;
+}
+
+async function writeGlobalScript(fileName: string, globalName: '__LATEST__' | '__DAILY__' | '__HISTORY__' | '__PROFILE__', payload: unknown): Promise<void> {
   await mkdir(outputDirectory, { recursive: true });
   await writeFile(path.join(outputDirectory, fileName), `window.${globalName} = ${JSON.stringify(payload)};\n`);
 }
@@ -258,18 +352,21 @@ async function buildOnce(dataDirectory: string, targetDate: string): Promise<voi
   const latestRoutes: LatestRoute[] = [];
   const dailyDays: Record<string, { [date: string]: { bySeqHour: DailyBuckets } }> = {};
   const historyRoutes: Record<string, HistoryRoute> = {};
+  const profileRoutes: Record<string, ProfileRoute> = {};
 
   for (const cache of caches) {
     const snapshotFiles = await listSnapshotFiles(dataDirectory, cache.route.name);
     latestRoutes.push(buildLatestRoute(cache, await findLatestSnapshot(snapshotFiles)));
     dailyDays[cache.route.name] = { [targetDate]: { bySeqHour: await buildDailyRoute(snapshotFiles, targetDate) } };
     historyRoutes[cache.route.name] = await buildHistoryRoute(snapshotFiles);
+    profileRoutes[cache.route.name] = await buildProfileRoute(snapshotFiles);
   }
 
   const latest: LatestPayload = { generatedAt: new Date().toISOString(), routes: latestRoutes };
   await writeGlobalScript('latest.js', '__LATEST__', latest);
   await writeGlobalScript('daily.js', '__DAILY__', { generatedAt: latest.generatedAt, days: dailyDays });
   await writeGlobalScript('history.js', '__HISTORY__', { generatedAt: latest.generatedAt, routes: historyRoutes });
+  await writeGlobalScript('profile.js', '__PROFILE__', { generatedAt: latest.generatedAt, routes: profileRoutes });
   console.log(`${new Date().toLocaleTimeString('ko-KR')} · 집계 완료 (${latestRoutes.map((entry) => `${entry.route.name} ${entry.vehicles.length}대`).join(', ')})`);
 }
 

@@ -90,6 +90,28 @@ export interface HistoryPayload {
   routes: Record<string, HistoryRoute>;
 }
 
+export interface ProfileCell {
+  weight: number;
+  demandSum: number;
+  demandSquaredSum: number;
+  censoredWeight: number;
+}
+
+export type ProfileBuckets = Record<string, Record<string, ProfileCell>>;
+
+export type DepletionCounts = Record<string, Record<string, number>>;
+
+export interface ProfileRoute {
+  weekday: ProfileBuckets;
+  weekend: ProfileBuckets;
+  depletion: { weekday: DepletionCounts; weekend: DepletionCounts };
+}
+
+export interface ProfilePayload {
+  generatedAt: string;
+  routes: Record<string, ProfileRoute>;
+}
+
 export interface SeatBucket {
   samples: number;
   minSeats: number | null;
@@ -265,6 +287,59 @@ export function readHistoryPayload(value: unknown): HistoryPayload | null {
   for (const [routeName, entry] of Object.entries(value.routes)) {
     if (!isRecord(entry)) continue;
     routes[routeName] = { weekday: readHistoryBuckets(entry.weekday), weekend: readHistoryBuckets(entry.weekend) };
+  }
+  return { generatedAt, routes };
+}
+
+function readProfileBuckets(value: unknown): ProfileBuckets {
+  if (!isRecord(value)) return {};
+  const buckets: ProfileBuckets = {};
+  for (const [sequenceKey, byBucket] of Object.entries(value)) {
+    if (!isRecord(byBucket)) continue;
+    buckets[sequenceKey] = {};
+    for (const [bucketKey, cell] of Object.entries(byBucket)) {
+      if (!isRecord(cell)) continue;
+      const weight = readNumber(cell.weight);
+      const demandSum = readNumber(cell.demandSum);
+      const demandSquaredSum = readNumber(cell.demandSquaredSum);
+      const censoredWeight = readNumber(cell.censoredWeight);
+      if (weight === null || demandSum === null || demandSquaredSum === null || censoredWeight === null) continue;
+      buckets[sequenceKey][bucketKey] = { weight, demandSum, demandSquaredSum, censoredWeight };
+    }
+  }
+  return buckets;
+}
+
+function readDepletionCounts(value: unknown): DepletionCounts {
+  if (!isRecord(value)) return {};
+  const counts: DepletionCounts = {};
+  for (const [bucketKey, bySequence] of Object.entries(value)) {
+    if (!isRecord(bySequence)) continue;
+    counts[bucketKey] = {};
+    for (const [sequenceKey, count] of Object.entries(bySequence)) {
+      const parsed = readNumber(count);
+      if (parsed !== null) counts[bucketKey][sequenceKey] = parsed;
+    }
+  }
+  return counts;
+}
+
+export function readProfilePayload(value: unknown): ProfilePayload | null {
+  if (!isRecord(value)) return null;
+  const generatedAt = readString(value.generatedAt);
+  if (!generatedAt || !isRecord(value.routes)) return null;
+  const routes: Record<string, ProfileRoute> = {};
+  for (const [routeName, entry] of Object.entries(value.routes)) {
+    if (!isRecord(entry)) continue;
+    const depletion = isRecord(entry.depletion) ? entry.depletion : {};
+    routes[routeName] = {
+      weekday: readProfileBuckets(entry.weekday),
+      weekend: readProfileBuckets(entry.weekend),
+      depletion: {
+        weekday: readDepletionCounts(depletion.weekday),
+        weekend: readDepletionCounts(depletion.weekend),
+      },
+    };
   }
   return { generatedAt, routes };
 }
