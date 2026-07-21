@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readRouteCache, readSnapshot, type DailyBuckets, type Direction, type LatestPayload, type LatestRoute, type RouteCache, type Snapshot, type VehicleSnapshot } from '../shared/model.js';
+import { readRouteCache, readSnapshot, type DailyBuckets, type Direction, type HistoryRoute, type LatestPayload, type LatestRoute, type RouteCache, type Snapshot, type VehicleSnapshot } from '../shared/model.js';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(currentDirectory, '..', '..');
@@ -136,6 +136,8 @@ function buildLatestRoute(cache: RouteCache, snapshot: Snapshot | null): LatestR
       name: stop.name,
       direction: directionOf(stop.sequence, turnSequence),
       isTurn: stop.isTurnStop || stop.sequence === turnSequence,
+      latitude: stop.latitude,
+      longitude: stop.longitude,
     })),
     vehicles: (snapshot?.vehicles ?? []).map((vehicle: VehicleSnapshot) => ({
       id: vehicle.id,
@@ -202,7 +204,51 @@ async function buildDailyRoute(snapshotFiles: string[], targetDate: string): Pro
   return daily;
 }
 
-async function writeGlobalScript(fileName: string, globalName: '__LATEST__' | '__DAILY__', payload: unknown): Promise<void> {
+function toSeoulBucket(isoText: string): { date: string; bucket: number; weekend: boolean } {
+  const seoulClock = new Date(new Date(isoText).getTime() + 9 * 3600 * 1000);
+  const day = seoulClock.getUTCDay();
+  return {
+    date: seoulClock.toISOString().slice(0, 10),
+    bucket: seoulClock.getUTCHours() * 2 + (seoulClock.getUTCMinutes() >= 30 ? 1 : 0),
+    weekend: day === 0 || day === 6,
+  };
+}
+
+// 만석 빈도 히스토리: 같은 날 같은 차량이 같은 셀(정류장×30분)에 여러 번 잡혀도 1회로 센다.
+async function buildHistoryRoute(snapshotFiles: string[]): Promise<HistoryRoute> {
+  const observations = new Map<string, { sequence: number; bucket: number; weekend: boolean; full: boolean }>();
+  for (const filePath of snapshotFiles) {
+    for (const snapshot of parseSnapshots(await readFile(filePath, 'utf8'))) {
+      const seoul = toSeoulBucket(snapshot.collectedAt);
+      for (const vehicle of snapshot.vehicles) {
+        if (vehicle.currentStopSequence === null) continue;
+        if (vehicle.remainingSeats === null || vehicle.remainingSeats < 0) continue;
+        observations.set(`${seoul.date}|${vehicle.id}|${vehicle.currentStopSequence}|${seoul.bucket}`, {
+          sequence: vehicle.currentStopSequence,
+          bucket: seoul.bucket,
+          weekend: seoul.weekend,
+          full: vehicle.remainingSeats === 0,
+        });
+      }
+    }
+  }
+
+  const history: HistoryRoute = { weekday: {}, weekend: {} };
+  for (const observation of observations.values()) {
+    const group = observation.weekend ? history.weekend : history.weekday;
+    const sequenceKey = String(observation.sequence);
+    const bucketKey = String(observation.bucket);
+    const hours = group[sequenceKey] ?? {};
+    const bucket = hours[bucketKey] ?? { samples: 0, zeroCount: 0 };
+    bucket.samples += 1;
+    if (observation.full) bucket.zeroCount += 1;
+    hours[bucketKey] = bucket;
+    group[sequenceKey] = hours;
+  }
+  return history;
+}
+
+async function writeGlobalScript(fileName: string, globalName: '__LATEST__' | '__DAILY__' | '__HISTORY__', payload: unknown): Promise<void> {
   await mkdir(outputDirectory, { recursive: true });
   await writeFile(path.join(outputDirectory, fileName), `window.${globalName} = ${JSON.stringify(payload)};\n`);
 }
@@ -211,16 +257,19 @@ async function buildOnce(dataDirectory: string, targetDate: string): Promise<voi
   const caches = await loadRouteCaches(dataDirectory);
   const latestRoutes: LatestRoute[] = [];
   const dailyDays: Record<string, { [date: string]: { bySeqHour: DailyBuckets } }> = {};
+  const historyRoutes: Record<string, HistoryRoute> = {};
 
   for (const cache of caches) {
     const snapshotFiles = await listSnapshotFiles(dataDirectory, cache.route.name);
     latestRoutes.push(buildLatestRoute(cache, await findLatestSnapshot(snapshotFiles)));
     dailyDays[cache.route.name] = { [targetDate]: { bySeqHour: await buildDailyRoute(snapshotFiles, targetDate) } };
+    historyRoutes[cache.route.name] = await buildHistoryRoute(snapshotFiles);
   }
 
   const latest: LatestPayload = { generatedAt: new Date().toISOString(), routes: latestRoutes };
   await writeGlobalScript('latest.js', '__LATEST__', latest);
   await writeGlobalScript('daily.js', '__DAILY__', { generatedAt: latest.generatedAt, days: dailyDays });
+  await writeGlobalScript('history.js', '__HISTORY__', { generatedAt: latest.generatedAt, routes: historyRoutes });
   console.log(`${new Date().toLocaleTimeString('ko-KR')} · 집계 완료 (${latestRoutes.map((entry) => `${entry.route.name} ${entry.vehicles.length}대`).join(', ')})`);
 }
 

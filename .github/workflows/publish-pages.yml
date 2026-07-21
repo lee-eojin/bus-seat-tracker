@@ -1,0 +1,60 @@
+name: Publish seat board
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17,47 * * * *'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Clone snapshot data
+        run: |
+          git clone --depth 1 "https://x-access-token:${{ secrets.BUS_DATA_REPO_TOKEN }}@github.com/lee-eojin/bus-seat-tracker-data.git" ../bus-data
+          cd ../bus-data
+          today_branch="collect/$(TZ=Asia/Seoul date +%F)"
+          if git fetch --depth 1 origin "$today_branch"; then
+            git checkout --quiet FETCH_HEAD
+          fi
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm run build:data -- --data-dir=../bus-data/data
+
+      - name: Assemble site
+        run: |
+          mkdir -p site/prototype-bus site/dist
+          cp prototype-bus/index.html site/prototype-bus/
+          cp -R prototype-bus/data site/prototype-bus/data
+          cp -R dist/prototype-bus dist/shared site/dist/
+          printf '<!doctype html><meta http-equiv="refresh" content="0; url=prototype-bus/" />' > site/index.html
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - uses: actions/deploy-pages@v4

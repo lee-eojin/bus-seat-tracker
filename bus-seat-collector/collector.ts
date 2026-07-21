@@ -182,10 +182,21 @@ async function cacheRouteStops(route: Route, stops: RouteStop[]): Promise<void> 
   await writeFile(path.join(routesDirectory, `${route.id}-stops.json`), `${JSON.stringify({ cachedAt: new Date().toISOString(), route, stops }, null, 2)}\n`);
 }
 
+function koreanDate(value: Date): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(value);
+  const partValue = (type: Intl.DateTimeFormatPartTypes): string => parts.find((part) => part.type === type)?.value ?? '';
+  return `${partValue('year')}-${partValue('month')}-${partValue('day')}`;
+}
+
 async function appendSnapshot(snapshot: Snapshot): Promise<void> {
   const snapshotsDirectory = path.join(dataDirectory, 'snapshots');
   await mkdir(snapshotsDirectory, { recursive: true });
-  const filePath = path.join(snapshotsDirectory, `${snapshot.route.name}-${snapshot.collectedAt.slice(0, 10)}.jsonl`);
+  const filePath = path.join(snapshotsDirectory, `${snapshot.route.name}-${koreanDate(new Date(snapshot.collectedAt))}.jsonl`);
   await appendFile(filePath, `${JSON.stringify(snapshot)}\n`);
 }
 
