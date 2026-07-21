@@ -563,7 +563,8 @@ interface NetDemandEstimate {
   lowConfidence: boolean;
 }
 
-const seatCapacity = 45;
+// 3330에는 2층버스가 다녀 잔여석 68까지 실측됨 — 일반차 44석 가정 금지 (v2 Phase 0 정원 항목)
+const seatCapacity = 80;
 const minutesPerStop = 2;
 const demandMinWeight = 1;
 
