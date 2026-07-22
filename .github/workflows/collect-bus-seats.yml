@@ -28,16 +28,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
 
       - id: collection-day
         name: Determine collection day
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ secrets.BUS_DATA_REPO_TOKEN }}
           script: |
@@ -53,7 +53,7 @@ jobs:
             core.setOutput('branch', `collect/${date}`);
 
       - name: Archive finished collection day
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           COLLECTION_DATE: ${{ steps.collection-day.outputs.date }}
         with:
@@ -61,11 +61,25 @@ jobs:
           script: |
             const [owner, repo] = 'lee-eojin/bus-seat-tracker-data'.split('/');
             const today = process.env.COLLECTION_DATE;
-            const references = await github.paginate(github.rest.git.listMatchingRefs, {
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            // GitHub이 과부하로 5xx를 반환하면 몇 분 안에 풀리므로 기다렸다가 다시 시도한다
+            async function withRetry(request) {
+              for (let attempt = 1; ; attempt += 1) {
+                try {
+                  return await request();
+                } catch (error) {
+                  const transient = !error.status || error.status === 429 || error.status >= 500;
+                  if (!transient || attempt >= 5) throw error;
+                  core.warning(`GitHub API 일시 오류, ${attempt * 15}초 뒤 재시도: ${error.message}`);
+                  await sleep(attempt * 15000);
+                }
+              }
+            }
+            const references = await withRetry(() => github.paginate(github.rest.git.listMatchingRefs, {
               owner,
               repo,
               ref: 'heads/collect/',
-            });
+            }));
             const finishedBranches = references
               .map((reference) => reference.ref.replace('refs/heads/', ''))
               .filter((branch) => /^collect\/\d{4}-\d{2}-\d{2}$/.test(branch) && branch.slice('collect/'.length) < today)
@@ -77,33 +91,33 @@ jobs:
             if (finishedBranches.length === 0) return;
 
             const branch = finishedBranches[0];
-            const mainReference = await github.rest.git.getRef({ owner, repo, ref: 'heads/main' });
-            const branchReference = await github.rest.git.getRef({ owner, repo, ref: `heads/${branch}` });
-            const comparison = await github.rest.repos.compareCommits({
+            const mainReference = await withRetry(() => github.rest.git.getRef({ owner, repo, ref: 'heads/main' }));
+            const branchReference = await withRetry(() => github.rest.git.getRef({ owner, repo, ref: `heads/${branch}` }));
+            const comparison = await withRetry(() => github.rest.repos.compareCommits({
               owner,
               repo,
               base: mainReference.data.object.sha,
               head: branchReference.data.object.sha,
-            });
+            }));
 
             if (comparison.data.status === 'ahead') {
-              const branchCommit = await github.rest.git.getCommit({ owner, repo, commit_sha: branchReference.data.object.sha });
-              const archiveCommit = await github.rest.git.createCommit({
+              const branchCommit = await withRetry(() => github.rest.git.getCommit({ owner, repo, commit_sha: branchReference.data.object.sha }));
+              const archiveCommit = await withRetry(() => github.rest.git.createCommit({
                 owner,
                 repo,
                 message: `data: archive bus seats ${branch.slice('collect/'.length)}`,
                 tree: branchCommit.data.tree.sha,
                 parents: [mainReference.data.object.sha],
-              });
-              await github.rest.git.updateRef({ owner, repo, ref: 'heads/main', sha: archiveCommit.data.sha });
+              }));
+              await withRetry(() => github.rest.git.updateRef({ owner, repo, ref: 'heads/main', sha: archiveCommit.data.sha }));
             } else if (comparison.data.status !== 'identical') {
               throw new Error(`${branch}가 현재 main에서 갈라졌습니다. 데이터 손실 방지를 위해 자동 병합을 중단했습니다.`);
             }
 
-            await github.rest.git.deleteRef({ owner, repo, ref: `heads/${branch}` });
+            await withRetry(() => github.rest.git.deleteRef({ owner, repo, ref: `heads/${branch}` }));
 
       - name: Prepare collection branch
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           COLLECTION_BRANCH: ${{ steps.collection-day.outputs.branch }}
         with:
@@ -111,13 +125,26 @@ jobs:
           script: |
             const [owner, repo] = 'lee-eojin/bus-seat-tracker-data'.split('/');
             const branch = process.env.COLLECTION_BRANCH;
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            async function withRetry(request) {
+              for (let attempt = 1; ; attempt += 1) {
+                try {
+                  return await request();
+                } catch (error) {
+                  const transient = !error.status || error.status === 429 || error.status >= 500;
+                  if (!transient || attempt >= 5) throw error;
+                  core.warning(`GitHub API 일시 오류, ${attempt * 15}초 뒤 재시도: ${error.message}`);
+                  await sleep(attempt * 15000);
+                }
+              }
+            }
 
             try {
-              await github.rest.git.getRef({ owner, repo, ref: `heads/${branch}` });
+              await withRetry(() => github.rest.git.getRef({ owner, repo, ref: `heads/${branch}` }));
             } catch (error) {
               if (error.status !== 404) throw error;
-              const mainReference = await github.rest.git.getRef({ owner, repo, ref: 'heads/main' });
-              await github.rest.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: mainReference.data.object.sha });
+              const mainReference = await withRetry(() => github.rest.git.getRef({ owner, repo, ref: 'heads/main' }));
+              await withRetry(() => github.rest.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: mainReference.data.object.sha }));
             }
 
       - uses: actions/checkout@v4
@@ -132,7 +159,7 @@ jobs:
       - run: npm run build
 
       - name: Collect until window end
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           COLLECTION_BRANCH: ${{ steps.collection-day.outputs.branch }}
           BUS_DATA_DIR: ${{ github.workspace }}/private-data/data
