@@ -3,3 +3,4 @@ dist/
 .env*
 bus-seat-collector/data/
 prototype-bus/data/
+.gstack/

@@ -139,8 +139,9 @@ function buildLatestRoute(cache: RouteCache, snapshot: Snapshot | null): LatestR
       latitude: stop.latitude,
       longitude: stop.longitude,
     })),
+    // 가명 차량 ID도 공개 산출물에는 싣지 않는다 — 라이브 경로(readLiveVehicles)와 같은 기준.
     vehicles: (snapshot?.vehicles ?? []).map((vehicle: VehicleSnapshot) => ({
-      id: vehicle.id,
+      id: null,
       stationSeq: vehicle.currentStopSequence,
       remainingSeats: vehicle.remainingSeats,
       crowded: vehicle.crowded,
