@@ -147,7 +147,7 @@ jobs:
               await withRetry(() => github.rest.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: mainReference.data.object.sha }));
             }
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: lee-eojin/bus-seat-tracker-data
           token: ${{ secrets.BUS_DATA_REPO_TOKEN }}
