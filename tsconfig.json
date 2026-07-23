@@ -15,5 +15,5 @@
     "rootDir": ".",
     "outDir": "dist"
   },
-  "include": ["bus-seat-collector/**/*.ts", "prototype-bus/**/*.ts", "shared/**/*.ts"]
+  "include": ["bus-seat-collector/**/*.ts", "prototype-bus/**/*.ts", "shared/**/*.ts", "backtest/**/*.ts"]
 }
