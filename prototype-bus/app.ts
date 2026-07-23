@@ -110,13 +110,23 @@ function minutesSince(isoText: string | null): number | null {
   return Number.isFinite(elapsed) ? Math.max(0, Math.round(elapsed / 60_000)) : null;
 }
 
-// 수집 워크플로의 피크 창 정의와 같은 값 (KST, 분 단위)
+// 수집 워크플로의 창 정의와 같은 값 (KST, 분 단위): 평일 피크 06:30-10:00·17:30-20:30,
+// 운행 시간대(평일 05-21시, 주말 06-23시 정시)는 시간당, 심야는 수집 휴지.
+// 심야와 운행 재개 직후 2시간은 마지막 정시 스냅샷(평일 21시, 주말 23시) 이후 경과를
+// 기대 주기로 삼는다 — 밤새, 그리고 아침 첫 스냅샷이 착지하기 전에 배너가 오작동하지 않게.
 function expectedIntervalMinutes(): number {
   const shifted = new Date(Date.now() + 9 * 3600 * 1000);
   const day = shifted.getUTCDay();
   const minutes = shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
-  const windows: Array<[number, number]> = day === 0 || day === 6 ? [[960, 1320]] : [[390, 630], [1050, 1290]];
-  return windows.some(([start, end]) => minutes >= start && minutes < end) ? 10 : 60;
+  const weekend = day === 0 || day === 6;
+  const windows: Array<[number, number]> = weekend ? [] : [[390, 600], [1050, 1230]];
+  if (windows.some(([start, end]) => minutes >= start && minutes < end)) return 10;
+  const [serviceStart, serviceEnd, lastSlot] = weekend ? [360, 1380, 1380] : [300, 1320, 1260];
+  if (minutes >= serviceStart + 120 && minutes < serviceEnd) return 60;
+  if (minutes >= serviceEnd) return minutes - lastSlot + 60;
+  const yesterday = (day + 6) % 7;
+  const yesterdayLastSlot = yesterday === 0 || yesterday === 6 ? 1380 : 1260;
+  return minutes + 1440 - yesterdayLastSlot + 60;
 }
 
 function currentRoute(payload: LatestPayload): LatestRoute | null {
@@ -411,7 +421,7 @@ function renderFreshness(route: LatestRoute): void {
   }
 
   const expected = expectedIntervalMinutes();
-  const tierLabel = expected === 10 ? '집중 수집 시간대' : '시간당 수집 시간대';
+  const tierLabel = expected === 10 ? '집중 수집 시간대' : expected === 60 ? '시간당 수집 시간대' : '심야 수집 휴지';
   label.textContent = `${minutes === 0 ? '방금 수집됨' : `${minutes}분 전 수집`} · ${tierLabel}`;
   if (minutes <= expected * 2) {
     badge.classList.add('ok');

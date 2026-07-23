@@ -11,10 +11,9 @@ on:
         required: false
         default: '300'
   schedule:
-    - cron: '0 * * * *'      # 매시 기본 스냅샷. 피크 창 안에 떨어지면 루프 백업 시동 역할
+    - cron: '0 * * * *'      # 매시 시동. 피크 창은 이어받고, 운행 시간대엔 1회 스냅샷, 심야엔 즉시 종료
     - cron: '30 21 * * 0-4'  # KST 평일 06:30 아침 피크 시동
     - cron: '30 8 * * 1-5'   # KST 평일 17:30 저녁 피크 시동
-    - cron: '0 7 * * 6,0'    # KST 주말 16:00 저녁 피크 시동
 
 permissions:
   contents: read
@@ -181,13 +180,13 @@ jobs:
             const dataDirectory = path.join(privateDataRoot, 'data');
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-            // KST 피크 창. 분 단위: 평일 06:30-10:30, 17:30-21:30 / 주말 16:00-22:00
+            // KST 피크 창. 분 단위: 평일 06:30-10:00, 17:30-20:30. 주말은 창 없이 균등 스냅샷만 한다.
             // 시동 크론이 스로틀돼도, 창 시작 60분 전 이후에 도착한 어떤 실행이든 창을 이어받는다.
             function activeWindow() {
               const shifted = new Date(Date.now() + 9 * 3600 * 1000);
               const day = shifted.getUTCDay();
               const minutes = shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
-              const windows = day === 0 || day === 6 ? [[960, 1320]] : [[390, 630], [1050, 1290]];
+              const windows = day === 0 || day === 6 ? [] : [[390, 600], [1050, 1230]];
               const found = windows.find(([start, end]) => minutes >= start - 60 && minutes < end);
               if (!found) return null;
               const kstMidnightMs = shifted.setUTCHours(0, 0, 0, 0);
@@ -195,6 +194,15 @@ jobs:
                 startMs: kstMidnightMs + found[0] * 60000 - 9 * 3600 * 1000,
                 endMs: kstMidnightMs + found[1] * 60000 - 9 * 3600 * 1000,
               };
+            }
+
+            // 스냅샷 운행 시간대 (KST): 평일 05:00-21:00, 주말 06:00-23:00 정시 스냅샷.
+            // 마지막 정시 실행이 스로틀로 밀려도 남기도록 한 시간 여유를 두고, 그 밖의 심야에는 수집하지 않는다.
+            function withinServiceHours() {
+              const shifted = new Date(Date.now() + 9 * 3600 * 1000);
+              const day = shifted.getUTCDay();
+              const minutes = shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
+              return day === 0 || day === 6 ? minutes >= 360 : minutes >= 300 && minutes < 1320;
             }
 
             let loopStartMs = Date.now();
@@ -211,8 +219,11 @@ jobs:
                 loopStartMs = window.startMs;
                 loopEndMs = window.endMs;
                 core.info(`피크 창 수집: ${new Date(window.endMs).toISOString()}까지 ${intervalSeconds}초 간격`);
-              } else {
+              } else if (withinServiceHours()) {
                 core.info('비피크: 1회 스냅샷만 수집');
+              } else {
+                core.info('심야 휴지: 이번 실행은 수집하지 않는다');
+                return;
               }
             }
             // 러너 6시간 한도 보호. 남은 창은 대기 중인 다음 실행이 이어받는다.
