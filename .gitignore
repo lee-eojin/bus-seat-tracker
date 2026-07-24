@@ -4,3 +4,4 @@ dist/
 bus-seat-collector/data/
 prototype-bus/data/
 .gstack/
+field-observations.jsonl
