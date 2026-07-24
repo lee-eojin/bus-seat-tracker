@@ -65,9 +65,18 @@ export function observationsByVehicle(snapshots: Snapshot[], acceptDate?: (date:
   return byVehicle;
 }
 
+// 구간 귀속 규약 (v2 §4.2의 S⁻/S⁺ 매핑 질문):
+// departure — 잔여석이 정류장 "출발(승차 반영 후)" 상태라고 보고 Δ를 (a,b]에 귀속 (기존 동작)
+// arrival   — 잔여석이 정류장 "도착(승차 반영 전)" 상태라고 보고 Δ를 [a,b−1]에 귀속
+export type SpanAttribution = 'departure' | 'arrival';
+
+function spanStopRange(fromSequence: number, toSequence: number, attribution: SpanAttribution): [number, number] {
+  return attribution === 'arrival' ? [fromSequence, toSequence - 1] : [fromSequence + 1, toSequence];
+}
+
 // 순수요 프로파일: 같은 운행의 연속 관측쌍에서 Δ좌석을 구간 정류장에 1/n 가중 배분.
 // 만석이 낀 쌍은 수요가 은닉되므로(검열) 표본에서 빼고 검열 가중치로만 센다.
-export function buildProfileRoute(snapshots: Snapshot[], acceptDate?: (date: string) => boolean): ProfileRoute {
+export function buildProfileRoute(snapshots: Snapshot[], acceptDate?: (date: string) => boolean, attribution: SpanAttribution = 'departure'): ProfileRoute {
   const profile: ProfileRoute = { weekday: {}, weekend: {}, depletion: { weekday: {}, weekend: {} } };
 
   for (const observations of observationsByVehicle(snapshots, acceptDate).values()) {
@@ -90,7 +99,8 @@ export function buildProfileRoute(snapshots: Snapshot[], acceptDate?: (date: str
         const weight = 1 / span;
         const perStopDemand = (from.seats - to.seats) / span;
         const group = to.weekend ? profile.weekend : profile.weekday;
-        for (let sequence = from.sequence + 1; sequence <= to.sequence; sequence += 1) {
+        const [firstStop, lastStop] = spanStopRange(from.sequence, to.sequence, attribution);
+        for (let sequence = firstStop; sequence <= lastStop; sequence += 1) {
           const byBucket = group[String(sequence)] ?? {};
           const cell: ProfileCell = byBucket[String(to.bucket)] ?? { weight: 0, demandSum: 0, demandSquaredSum: 0, censoredWeight: 0 };
           if (censored) {
@@ -233,4 +243,145 @@ export function distributionQuantile(distribution: number[], quantile: number): 
     if (cumulative >= quantile) return seats;
   }
   return distribution.length - 1;
+}
+
+// ── 구간합 역산 프로파일 (v2 §4.3: 균등 배분 제거) ──
+// 관측쌍이 주는 것은 구간 합 Δᵢ = Σ_{k∈Kᵢ} N_k 뿐이다. 배분을 가정하지 않고,
+// 서로 다른 운행의 구간 경계가 어긋나며 겹치는 것을 제약으로 삼아 정류장별
+// 평균·분산을 ridge 최소제곱 좌표하강으로 복원한다. 모든 구간이 동일하게
+// 겹치면(추가 정보 없음) 균등 배분과 같은 해로 퇴화한다.
+
+interface SpanObservation {
+  stops: number[];
+  total: number;
+}
+
+const deconvolutionRidge = 1;
+const deconvolutionSweeps = 200;
+const deconvolutionTolerance = 1e-9;
+
+interface SpanSolution {
+  values: Map<number, number>;
+  fitted: number[];
+}
+
+function solveSpanSums(spans: SpanObservation[], targets: number[], floor: number | null): SpanSolution {
+  const covering = new Map<number, number[]>();
+  spans.forEach((span, index) => {
+    for (const stop of span.stops) {
+      const list = covering.get(stop) ?? [];
+      list.push(index);
+      covering.set(stop, list);
+    }
+  });
+
+  const values = new Map<number, number>();
+  for (const [stop, indexes] of covering) {
+    let sum = 0;
+    for (const index of indexes) sum += (targets[index] ?? 0) / (spans[index]?.stops.length ?? 1);
+    const initial = sum / indexes.length;
+    values.set(stop, floor === null ? initial : Math.max(floor, initial));
+  }
+
+  const fitted = spans.map((span) => span.stops.reduce((sum, stop) => sum + (values.get(stop) ?? 0), 0));
+
+  for (let sweep = 0; sweep < deconvolutionSweeps; sweep += 1) {
+    let largestShift = 0;
+    for (const [stop, indexes] of covering) {
+      const current = values.get(stop) ?? 0;
+      let numerator = 0;
+      for (const index of indexes) numerator += (targets[index] ?? 0) - ((fitted[index] ?? 0) - current);
+      let next = numerator / (indexes.length + deconvolutionRidge);
+      if (floor !== null) next = Math.max(floor, next);
+      if (next !== current) {
+        for (const index of indexes) fitted[index] = (fitted[index] ?? 0) + next - current;
+        values.set(stop, next);
+        largestShift = Math.max(largestShift, Math.abs(next - current));
+      }
+    }
+    if (largestShift < deconvolutionTolerance) break;
+  }
+  return { values, fitted };
+}
+
+export function buildDeconvolvedProfileRoute(snapshots: Snapshot[], acceptDate?: (date: string) => boolean, attribution: SpanAttribution = 'departure'): ProfileRoute {
+  const profile: ProfileRoute = { weekday: {}, weekend: {}, depletion: { weekday: {}, weekend: {} } };
+  const groups = new Map<string, SpanObservation[]>();
+  const censoredCovers = new Map<string, number>();
+
+  for (const observations of observationsByVehicle(snapshots, acceptDate).values()) {
+    for (const run of splitRuns(observations)) {
+      const depleted = run.find((observation) => observation.seats === 0);
+      if (depleted) {
+        const group = depleted.weekend ? profile.depletion.weekend : profile.depletion.weekday;
+        const bySequence = group[String(depleted.bucket)] ?? {};
+        bySequence[String(depleted.sequence)] = (bySequence[String(depleted.sequence)] ?? 0) + 1;
+        group[String(depleted.bucket)] = bySequence;
+      }
+
+      for (let index = 1; index < run.length; index += 1) {
+        const from = run[index - 1];
+        const to = run[index];
+        if (!from || !to) continue;
+        const span = to.sequence - from.sequence;
+        if (span <= 0 || to.time - from.time > pairMaxGapMs) continue;
+        const stops: number[] = [];
+        const [firstStop, lastStop] = spanStopRange(from.sequence, to.sequence, attribution);
+        for (let sequence = firstStop; sequence <= lastStop; sequence += 1) stops.push(sequence);
+        const groupKey = `${to.weekend ? 'weekend' : 'weekday'}|${to.bucket}`;
+        if (from.seats === 0 || to.seats === 0) {
+          for (const stop of stops) {
+            const cellKey = `${groupKey}|${stop}`;
+            censoredCovers.set(cellKey, (censoredCovers.get(cellKey) ?? 0) + 1);
+          }
+          continue;
+        }
+        const spansForGroup = groups.get(groupKey) ?? [];
+        spansForGroup.push({ stops, total: from.seats - to.seats });
+        groups.set(groupKey, spansForGroup);
+      }
+    }
+  }
+
+  for (const [groupKey, spans] of groups) {
+    const [groupName, bucketKey] = groupKey.split('|');
+    if (!bucketKey) continue;
+    const target = groupName === 'weekend' ? profile.weekend : profile.weekday;
+    const totals = spans.map((span) => span.total);
+    const means = solveSpanSums(spans, totals, null);
+    const squaredResiduals = spans.map((span, index) => ((totals[index] ?? 0) - (means.fitted[index] ?? 0)) ** 2);
+    const variances = solveSpanSums(spans, squaredResiduals, 0);
+
+    const coverCounts = new Map<number, number>();
+    for (const span of spans) {
+      for (const stop of span.stops) coverCounts.set(stop, (coverCounts.get(stop) ?? 0) + 1);
+    }
+
+    for (const [stop, count] of coverCounts) {
+      const mean = means.values.get(stop) ?? 0;
+      const variance = variances.values.get(stop) ?? 0;
+      const byBucket = target[String(stop)] ?? {};
+      byBucket[bucketKey] = {
+        weight: count,
+        demandSum: mean * count,
+        demandSquaredSum: (variance + mean * mean) * count,
+        censoredWeight: censoredCovers.get(`${groupKey}|${stop}`) ?? 0,
+      };
+      target[String(stop)] = byBucket;
+    }
+  }
+
+  // 검열 구간만 지나간 셀도 저신뢰 신호를 위해 남긴다 (균등 배분 빌더와 같은 의미).
+  for (const [cellKey, count] of censoredCovers) {
+    const [groupName, bucketKey, stopKey] = cellKey.split('|');
+    if (!bucketKey || !stopKey) continue;
+    const target = groupName === 'weekend' ? profile.weekend : profile.weekday;
+    const byBucket = target[stopKey] ?? {};
+    if (!byBucket[bucketKey]) {
+      byBucket[bucketKey] = { weight: 0, demandSum: 0, demandSquaredSum: 0, censoredWeight: count };
+      target[stopKey] = byBucket;
+    }
+  }
+
+  return profile;
 }

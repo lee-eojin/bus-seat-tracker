@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { readRouteCache, readSnapshot, type RouteCache, type Snapshot } from '../shared/model.js';
 import {
   applyNetDemand,
+  buildDeconvolvedProfileRoute,
   buildHistoryRoute,
   buildProfileRoute,
   defaultSeatCapacity,
@@ -74,8 +75,8 @@ async function loadSnapshots(dataDirectory: string, routeName: string): Promise<
   return snapshots;
 }
 
-type ModelKey = 'naive-persist' | 'profile-propagate' | 'full-frequency' | 'conservative';
-const MODELS: ModelKey[] = ['naive-persist', 'profile-propagate', 'full-frequency', 'conservative'];
+type ModelKey = 'naive-persist' | 'profile-propagate' | 'profile-deconv' | 'uniform-arrival' | 'deconv-arrival' | 'full-frequency' | 'conservative';
+const MODELS: ModelKey[] = ['naive-persist', 'profile-propagate', 'profile-deconv', 'uniform-arrival', 'deconv-arrival', 'full-frequency', 'conservative'];
 
 interface Prediction {
   seats: number | null; // 좌석 점추정 (없으면 MAE 제외)
@@ -140,30 +141,43 @@ function fullFrequencyAt(history: ReturnType<typeof buildHistoryRoute>, sequence
   return cell && cell.samples > 0 ? cell.zeroCount / cell.samples : fallback;
 }
 
-function predictInstance(
-  from: VehicleObservation,
-  to: VehicleObservation,
-  stopSequences: number[],
-  profile: ReturnType<typeof buildProfileRoute>,
-  history: ReturnType<typeof buildHistoryRoute>,
-  baseFullRate: number,
-): Record<ModelKey, Prediction> {
-  // profile-propagate: 시작 좌석에서 구간 정류장마다 순수요 분포를 순차 적용 (끝점 버킷으로 조회).
+// 시작 좌석에서 구간 정류장마다 순수요 분포를 순차 적용 (끝점 버킷으로 조회).
+function propagateProfile(profile: ReturnType<typeof buildProfileRoute>, from: VehicleObservation, to: VehicleObservation, stopSequences: number[]): Prediction {
   let distribution = pointDistribution(from.seats);
   for (const sequence of stopSequences) {
     const estimate = netDemandAt(profile, sequence, to.bucket, to.weekend);
     distribution = applyNetDemand(distribution, estimate);
   }
-  const profilePrediction: Prediction = {
+  return {
     seats: distributionMean(distribution),
     fullProbability: distribution[0] ?? 0,
     low: distributionQuantile(distribution, 0.1),
     high: distributionQuantile(distribution, 0.9),
   };
+}
 
+interface FoldProfiles {
+  uniformDeparture: ReturnType<typeof buildProfileRoute>;
+  deconvDeparture: ReturnType<typeof buildProfileRoute>;
+  uniformArrival: ReturnType<typeof buildProfileRoute>;
+  deconvArrival: ReturnType<typeof buildProfileRoute>;
+}
+
+function predictInstance(
+  from: VehicleObservation,
+  to: VehicleObservation,
+  departureStops: number[],
+  arrivalStops: number[],
+  profiles: FoldProfiles,
+  history: ReturnType<typeof buildHistoryRoute>,
+  baseFullRate: number,
+): Record<ModelKey, Prediction> {
   return {
     'naive-persist': { seats: from.seats, fullProbability: from.seats === 0 ? 1 : 0, low: from.seats, high: from.seats },
-    'profile-propagate': profilePrediction,
+    'profile-propagate': propagateProfile(profiles.uniformDeparture, from, to, departureStops),
+    'profile-deconv': propagateProfile(profiles.deconvDeparture, from, to, departureStops),
+    'uniform-arrival': propagateProfile(profiles.uniformArrival, from, to, arrivalStops),
+    'deconv-arrival': propagateProfile(profiles.deconvArrival, from, to, arrivalStops),
     'full-frequency': { seats: null, fullProbability: fullFrequencyAt(history, to.sequence, to.bucket, baseFullRate), low: null, high: null },
     'conservative': { seats: null, fullProbability: 0, low: null, high: null },
   };
@@ -183,8 +197,14 @@ function runFold(snapshotsByRoute: Map<string, Snapshot[]>, stopsByRoute: Map<st
     const stopSet = stopsByRoute.get(routeName);
     if (!stopSet) continue;
     const sortedStops = [...stopSet].sort((left, right) => left - right);
-    const profile = buildProfileRoute(snapshots, (date) => trainSet.has(date));
-    const history = buildHistoryRoute(snapshots, (date) => trainSet.has(date));
+    const inTraining = (date: string): boolean => trainSet.has(date);
+    const profiles: FoldProfiles = {
+      uniformDeparture: buildProfileRoute(snapshots, inTraining),
+      deconvDeparture: buildDeconvolvedProfileRoute(snapshots, inTraining),
+      uniformArrival: buildProfileRoute(snapshots, inTraining, 'arrival'),
+      deconvArrival: buildDeconvolvedProfileRoute(snapshots, inTraining, 'arrival'),
+    };
+    const history = buildHistoryRoute(snapshots, inTraining);
     const baseFullRate = routeFullRate(history);
 
     const byVehicle = observationsByVehicle(snapshots, (date) => date === testDate);
@@ -196,13 +216,14 @@ function runFold(snapshotsByRoute: Map<string, Snapshot[]>, stopsByRoute: Map<st
           if (!from || !to) continue;
           if (to.sequence <= from.sequence) continue;
           if (to.time - from.time > pairMaxGapMs) continue;
-          const spanStops = sortedStops.filter((sequence) => sequence > from.sequence && sequence <= to.sequence);
-          if (spanStops.length === 0) continue;
+          const departureStops = sortedStops.filter((sequence) => sequence > from.sequence && sequence <= to.sequence);
+          if (departureStops.length === 0) continue;
+          const arrivalStops = sortedStops.filter((sequence) => sequence >= from.sequence && sequence < to.sequence);
           instances.push({
             horizonStops: to.sequence - from.sequence,
             actualSeats: to.seats,
             actualFull: to.seats === 0,
-            predictions: predictInstance(from, to, spanStops, profile, history, baseFullRate),
+            predictions: predictInstance(from, to, departureStops, arrivalStops, profiles, history, baseFullRate),
           });
         }
       }
@@ -229,23 +250,21 @@ function report(folds: FoldResult[]): void {
   const fullCount = pooled.filter((instance) => instance.actualFull).length;
   console.log(`\n[pooled] 총 관측쌍 ${pooled.length}건 · 실제 만석 ${fullCount}건 (${pooled.length ? (fullCount / pooled.length * 100).toFixed(1) : '0'}%)`);
 
-  // horizon별 MAE (naive vs profile) — 헤드라인
-  console.log('\n── 도착 좌석 MAE (horizon 정류장 수별) ─────────────────────');
-  console.log('horizon      n    naive-persist  profile-propagate   Δ(profile−naive)');
+  // horizon별 MAE — 2×2: 귀속 규약(departure/arrival) × 배분(균등/역산). * = 행 최소
+  console.log('\n── 도착 좌석 MAE (horizon 정류장 수별, * = 최소) ─────────────');
+  console.log('horizon      n      naive   uni(dep)   dec(dep)   uni(arr)   dec(arr)');
   for (const label of [...horizonOrder, 'all']) {
     const subset = label === 'all' ? pooled : pooled.filter((instance) => horizonLabel(instance.horizonStops) === label);
     if (subset.length === 0) continue;
-    const naive = emptyAccumulator();
-    const profile = emptyAccumulator();
-    for (const instance of subset) {
-      accumulate(naive, instance.predictions['naive-persist'], instance.actualSeats, instance.actualFull);
-      accumulate(profile, instance.predictions['profile-propagate'], instance.actualSeats, instance.actualFull);
-    }
-    const naiveMae = naive.absError / naive.pointN;
-    const profileMae = profile.absError / profile.pointN;
-    const delta = profileMae - naiveMae;
-    const mark = delta < 0 ? ' ✓profile' : delta > 0 ? ' ✗naive' : '';
-    console.log(`${label.padEnd(8)} ${String(subset.length).padStart(6)}    ${naiveMae.toFixed(3).padStart(9)}      ${profileMae.toFixed(3).padStart(9)}        ${delta >= 0 ? '+' : ''}${delta.toFixed(3)}${mark}`);
+    const keys: ModelKey[] = ['naive-persist', 'profile-propagate', 'profile-deconv', 'uniform-arrival', 'deconv-arrival'];
+    const maes = keys.map((key) => {
+      const accumulator = emptyAccumulator();
+      for (const instance of subset) accumulate(accumulator, instance.predictions[key], instance.actualSeats, instance.actualFull);
+      return accumulator.absError / accumulator.pointN;
+    });
+    const minValue = Math.min(...maes);
+    const cells = maes.map((value, index) => (value.toFixed(3) + (value === minValue ? '*' : '')).padStart(index === 0 ? 9 : 10));
+    console.log(`${label.padEnd(8)} ${String(subset.length).padStart(6)}  ${cells.join(' ')}`);
   }
 
   // 만석 사건 Brier (전 후보) + 예측구간 포함률
@@ -260,27 +279,32 @@ function report(folds: FoldResult[]): void {
     const brier = accumulator.brier / accumulator.n;
     console.log(`  ${model.padEnd(20)} Brier ${brier.toFixed(4)}`);
   }
-  const profileAccumulator = accumulators.get('profile-propagate')!;
-  console.log(`\n  profile-propagate 예측구간 포함률: ${(profileAccumulator.covered / profileAccumulator.intervalN * 100).toFixed(1)}% (n=${profileAccumulator.intervalN}, 목표 80%)`);
+  console.log('');
+  for (const key of ['profile-propagate', 'profile-deconv', 'uniform-arrival', 'deconv-arrival'] as const) {
+    const accumulator = accumulators.get(key)!;
+    console.log(`  ${key.padEnd(20)} 예측구간 포함률 ${(accumulator.covered / accumulator.intervalN * 100).toFixed(1)}% (n=${accumulator.intervalN}, 목표 80%)`);
+  }
 
-  // 만석확률 보정 (profile-propagate)
-  console.log('\n── profile-propagate 만석확률 보정 (예측 vs 실제) ─────────');
+  // 만석확률 보정 (프로파일 4종)
   const bins: Array<[number, number]> = [[0, 0.05], [0.05, 0.2], [0.2, 0.5], [0.5, 1.01]];
-  console.log('예측확률 구간     n    평균예측    실제만석률');
-  for (const [low, high] of bins) {
-    const subset = pooled.filter((instance) => {
-      const probability = instance.predictions['profile-propagate'].fullProbability;
-      return probability >= low && probability < high;
-    });
-    if (subset.length === 0) continue;
-    const meanPredicted = subset.reduce((sum, instance) => sum + instance.predictions['profile-propagate'].fullProbability, 0) / subset.length;
-    const empirical = subset.filter((instance) => instance.actualFull).length / subset.length;
-    console.log(`  [${low.toFixed(2)}, ${high >= 1 ? '1.00' : high.toFixed(2)})  ${String(subset.length).padStart(6)}    ${meanPredicted.toFixed(3).padStart(6)}     ${empirical.toFixed(3).padStart(6)}`);
+  for (const key of ['profile-propagate', 'profile-deconv', 'uniform-arrival', 'deconv-arrival'] as const) {
+    console.log(`\n── ${key} 만석확률 보정 (예측 vs 실제) ─────────`);
+    console.log('예측확률 구간     n    평균예측    실제만석률');
+    for (const [low, high] of bins) {
+      const subset = pooled.filter((instance) => {
+        const probability = instance.predictions[key].fullProbability;
+        return probability >= low && probability < high;
+      });
+      if (subset.length === 0) continue;
+      const meanPredicted = subset.reduce((sum, instance) => sum + instance.predictions[key].fullProbability, 0) / subset.length;
+      const empirical = subset.filter((instance) => instance.actualFull).length / subset.length;
+      console.log(`  [${low.toFixed(2)}, ${high >= 1 ? '1.00' : high.toFixed(2)})  ${String(subset.length).padStart(6)}    ${meanPredicted.toFixed(3).padStart(6)}     ${empirical.toFixed(3).padStart(6)}`);
+    }
   }
 
   console.log('\n' + '─'.repeat(78));
-  console.log('주의: 평일 3폴드(20·21·22·23 중)·표본 소량. 수치는 방향성이며 결론이 아니다.');
-  console.log('7/23은 진행 중(오전 피크만)인 부분 데이터. 운행 재구성이 옳다는 가정 하의 평가.');
+  console.log('주의: 평일 rolling-origin·표본 소량. 수치는 방향성이며 결론이 아니다.');
+  console.log('마지막 날은 진행 중인 부분 데이터일 수 있다. 운행 재구성이 옳다는 가정 하의 평가.');
   console.log('─'.repeat(78));
 }
 
