@@ -24,6 +24,17 @@ interface LiveOverlay {
   fetchedAt: number | null;
 }
 
+interface RouteCoordinates {
+  latitude: number;
+  longitude: number;
+}
+
+type RouteLocationState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; coordinates: RouteCoordinates }
+  | { kind: 'unavailable' };
+
 const liveApiUrl = 'https://apis.data.go.kr/6410000/buslocationservice/v2/getBusLocationListv2';
 const liveFreshLimit = 180_000;
 const livePollIntervalMs = 30_000;
@@ -51,11 +62,11 @@ interface BoardingRecord {
 
 let selection: Selection = { routeName: null, direction: 'up' };
 let destination = localStorage.getItem('bus-destination');
-let destinationSkipped = false;
 let expandedStopSequence: number | null = null;
 let live: LiveOverlay = { routeId: null, vehicles: [], fetchedAt: null };
 let boardingStop = readBoardingStop();
 let recordFormOpen = false;
+let routeLocation: RouteLocationState = { kind: 'idle' };
 
 function readBoardingStop(): BoardingStop | null {
   try {
@@ -114,6 +125,8 @@ function minutesSince(isoText: string | null): number | null {
 // 운행 시간대(평일 05-21시, 주말 06-23시 정시)는 시간당, 심야는 수집 휴지.
 // 심야와 운행 재개 직후 2시간은 마지막 정시 스냅샷(평일 21시, 주말 23시) 이후 경과를
 // 기대 주기로 삼는다 — 밤새, 그리고 아침 첫 스냅샷이 착지하기 전에 배너가 오작동하지 않게.
+// 피크 창 안의 조밀 구간(1분)은 여기 반영하지 않는다. 화면 신선도의 하한은 수집 간격이
+// 아니라 Pages 발행 주기(30분)이므로, 기대 주기를 1분으로 낮추면 상시 경고가 뜬다.
 function expectedIntervalMinutes(): number {
   const shifted = new Date(Date.now() + 9 * 3600 * 1000);
   const day = shifted.getUTCDay();
@@ -366,12 +379,96 @@ function readRecords(): BoardingRecord[] {
   }
 }
 
-// 카카오맵 오픈 API에는 대중교통 길찾기가 없어 링크로 위임한다.
-// 스킴 브리지는 앱·모바일웹·데스크톱 모두에서 by=publictransit을 유지한다.
-// map.kakao.com/link/* 웹 링크는 교통수단 파라미터가 없어 자가용으로 열리므로 쓰지 않는다.
-function kakaoRouteHref(stop: DisplayStop): string | null {
-  if (stop.latitude === null || stop.longitude === null) return null;
-  return `https://m.map.kakao.com/scheme/route?ep=${stop.latitude},${stop.longitude}&by=publictransit`;
+function naverMapHref(
+  mode: 'walk' | 'public',
+  end: RouteCoordinates,
+  endName: string,
+  start?: RouteCoordinates,
+  startName?: string,
+): string {
+  const parameters = new URLSearchParams({
+    dlat: String(end.latitude),
+    dlng: String(end.longitude),
+    dname: endName,
+    appname: `${location.origin}${location.pathname}`,
+  });
+  if (start) {
+    parameters.set('slat', String(start.latitude));
+    parameters.set('slng', String(start.longitude));
+    if (startName) parameters.set('sname', startName);
+  }
+  return `nmap://route/${mode}?${parameters.toString()}`;
+}
+
+function isMobileMapTarget(): boolean {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+function naverWebSearchHref(query: string): string {
+  return `https://map.naver.com/p/search/${encodeURIComponent(query)}`;
+}
+
+function naverSearchHref(query: string): string {
+  if (!isMobileMapTarget()) return naverWebSearchHref(query);
+  const parameters = new URLSearchParams({
+    query,
+    appname: `${location.origin}${location.pathname}`,
+  });
+  return `nmap://search?${parameters.toString()}`;
+}
+
+function naverWebRoutePoint(coordinates: RouteCoordinates, name: string): string {
+  return `${coordinates.longitude},${coordinates.latitude},${encodeURIComponent(name)},,ADDRESS_POI`;
+}
+
+function naverPublicTransitHref(
+  start: RouteCoordinates,
+  startName: string,
+  end: RouteCoordinates,
+  endName: string,
+): string {
+  if (isMobileMapTarget()) return naverMapHref('public', end, endName, start, startName);
+  return `https://map.naver.com/p/directions/${naverWebRoutePoint(start, startName)}/${naverWebRoutePoint(end, endName)}/-/transit`;
+}
+
+function createNaverMapLink(href: string, label: string, fallbackQuery: string): HTMLAnchorElement {
+  const link = document.createElement('a');
+  link.href = href;
+  link.textContent = label;
+  if (!href.startsWith('nmap://')) return link;
+  link.addEventListener('click', () => {
+    const clickedAt = Date.now();
+    window.setTimeout(() => {
+      if (Date.now() - clickedAt < 2_000 && document.visibilityState === 'visible') {
+        location.href = naverWebSearchHref(fallbackQuery);
+      }
+    }, 1_500);
+  });
+  return link;
+}
+
+function requestRouteLocation(): void {
+  if (routeLocation.kind !== 'idle') return;
+  if (!navigator.geolocation) {
+    routeLocation = { kind: 'unavailable' };
+    render();
+    return;
+  }
+  routeLocation = { kind: 'loading' };
+  navigator.geolocation.getCurrentPosition(
+    ({ coords }) => {
+      routeLocation = {
+        kind: 'ready',
+        coordinates: { latitude: coords.latitude, longitude: coords.longitude },
+      };
+      render();
+    },
+    () => {
+      routeLocation = { kind: 'unavailable' };
+      render();
+    },
+    { enableHighAccuracy: false, timeout: 8_000, maximumAge: 300_000 },
+  );
 }
 
 function normalizeStopName(name: string): string {
@@ -396,9 +493,14 @@ function destinationLegHref(stop: DisplayStop): string | null {
   if (!destination || stop.latitude === null || stop.longitude === null) return null;
   const target = findDestinationStop();
   if (!target || target.latitude === null || target.longitude === null) {
-    return `https://map.kakao.com/link/search/${encodeURIComponent(destination)}`;
+    return naverSearchHref(destination);
   }
-  return `https://m.map.kakao.com/scheme/route?sp=${stop.latitude},${stop.longitude}&ep=${target.latitude},${target.longitude}&by=publictransit`;
+  return naverPublicTransitHref(
+    { latitude: stop.latitude, longitude: stop.longitude },
+    stop.name ?? `정류장 ${stop.sequence}`,
+    { latitude: target.latitude, longitude: target.longitude },
+    target.name ?? destination,
+  );
 }
 
 function renderFreshness(route: LatestRoute): void {
@@ -656,7 +758,12 @@ function forecastVehicle(route: LatestRoute, vehicle: DisplayVehicle, stops: Dis
   if (vehicle.stationSeq === null || vehicle.remainingSeats === null || vehicle.remainingSeats < 0) return forecasts;
   let distribution = new Array<number>(seatCapacity + 1).fill(0);
   distribution[Math.min(vehicle.remainingSeats, seatCapacity)] = 1;
-  let lowConfidence = false;
+  // 도착 귀속: 표시 잔여석은 현재 정류장 '도착(승차 반영 전)' 상태다. 하류 예측은 현재
+  // 정류장 승차부터 반영해야 핫스팟이 한 칸 밀리지 않는다 (검증 보고서 §5·§9-1).
+  const nowBucket = bucketAtMinutesAhead(0);
+  const boardingHere = netDemandAt(route.route.name, vehicle.stationSeq, nowBucket.bucket, nowBucket.weekend);
+  let lowConfidence = boardingHere.lowConfidence;
+  distribution = applyNetDemand(distribution, boardingHere);
   let stopsAhead = 0;
   for (const stop of stops) {
     if (stop.sequence <= vehicle.stationSeq) continue;
@@ -754,38 +861,58 @@ function renderAxis(route: LatestRoute): void {
       pill.textContent = seatLabel(vehicle);
       row.append(pill);
     }
-    const routeHref = kakaoRouteHref(stop);
-    if (routeHref) {
+    const stopCoordinates: RouteCoordinates | null = stop.latitude === null || stop.longitude === null
+      ? null
+      : { latitude: stop.latitude, longitude: stop.longitude };
+    if (stopCoordinates) {
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'stop-route-link';
       toggle.textContent = '길찾기';
       toggle.setAttribute('aria-expanded', String(expandedStopSequence === stop.sequence));
       toggle.addEventListener('click', () => {
-        expandedStopSequence = expandedStopSequence === stop.sequence ? null : stop.sequence;
+        const opening = expandedStopSequence !== stop.sequence;
+        expandedStopSequence = opening ? stop.sequence : null;
+        if (opening) requestRouteLocation();
         render();
       });
       row.append(toggle);
     }
     axis.append(row);
 
-    if (routeHref && expandedStopSequence === stop.sequence) {
+    if (stopCoordinates && expandedStopSequence === stop.sequence) {
       const panel = document.createElement('div');
       panel.className = 'route-panel';
-      const firstLeg = document.createElement('a');
-      firstLeg.href = routeHref;
-      firstLeg.target = '_blank';
-      firstLeg.rel = 'noreferrer';
-      firstLeg.textContent = '이 정류장까지';
-      panel.append(firstLeg);
+      const stopName = stop.name ?? `정류장 ${stop.sequence}`;
+      if (routeLocation.kind === 'loading' || routeLocation.kind === 'idle') {
+        const status = document.createElement('p');
+        status.className = 'route-location-status';
+        status.textContent = '현재 위치를 확인하고 있습니다…';
+        panel.append(status);
+      } else if (routeLocation.kind === 'ready') {
+        panel.append(createNaverMapLink(
+          naverPublicTransitHref(routeLocation.coordinates, '현재 위치', stopCoordinates, stopName),
+          '현재 위치에서 이 정류장까지',
+          stopName,
+        ));
+      } else {
+        const status = document.createElement('p');
+        status.className = 'route-location-status';
+        status.textContent = '현재 위치 권한이 필요합니다.';
+        const retryLocation = document.createElement('button');
+        retryLocation.type = 'button';
+        retryLocation.className = 'route-location-retry';
+        retryLocation.textContent = '현재 위치 다시 확인';
+        retryLocation.addEventListener('click', () => {
+          routeLocation = { kind: 'idle' };
+          requestRouteLocation();
+          render();
+        });
+        panel.append(status, retryLocation);
+      }
       const secondHref = destinationLegHref(stop);
       if (secondHref) {
-        const secondLeg = document.createElement('a');
-        secondLeg.href = secondHref;
-        secondLeg.target = '_blank';
-        secondLeg.rel = 'noreferrer';
-        secondLeg.textContent = `여기서 ${destination}까지`;
-        panel.append(secondLeg);
+        panel.append(createNaverMapLink(secondHref, `여기서 ${destination}까지`, destination ?? stopName));
       }
       const boardHere = document.createElement('button');
       boardHere.type = 'button';
@@ -805,7 +932,7 @@ function renderAxis(route: LatestRoute): void {
 
 function render(): void {
   const state = boardState();
-  const needsDestination = state.kind === 'ready' && destination === null && !destinationSkipped;
+  const needsDestination = state.kind === 'ready' && destination === null;
   getElement<HTMLDivElement>('setup').classList.toggle('show', state.kind === 'empty');
   getElement<HTMLDivElement>('destination-screen').classList.toggle('show', needsDestination);
   getElement<HTMLDivElement>('board').classList.toggle('show', state.kind === 'ready' && !needsDestination);
@@ -871,11 +998,6 @@ getElement<HTMLButtonElement>('phase0-export').addEventListener('click', () => {
   URL.revokeObjectURL(link.href);
 });
 
-getElement<HTMLButtonElement>('destination-skip').addEventListener('click', () => {
-  destinationSkipped = true;
-  render();
-});
-
 getElement<HTMLFormElement>('record-form').addEventListener('submit', (event) => {
   event.preventDefault();
   const state = boardState();
@@ -902,7 +1024,6 @@ getElement<HTMLFormElement>('record-form').addEventListener('submit', (event) =>
 
 getElement<HTMLButtonElement>('destination-chip').addEventListener('click', () => {
   destination = null;
-  destinationSkipped = false;
   localStorage.removeItem('bus-destination');
   render();
 });

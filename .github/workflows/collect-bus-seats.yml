@@ -180,20 +180,44 @@ jobs:
             const dataDirectory = path.join(privateDataRoot, 'data');
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-            // KST 피크 창. 분 단위: 평일 06:30-10:00, 17:30-20:30. 주말은 창 없이 균등 스냅샷만 한다.
+            // KST 피크 창과 그 안의 조밀 구간. 분 단위 [창 시작, 창 끝, 조밀 시작, 조밀 끝].
+            // 평일 06:30-10:00(조밀 07:00-09:00), 17:30-20:30(조밀 18:00-19:30). 주말은 창 없이 균등 스냅샷만 한다.
+            // 조밀 구간은 정류장별 도착·출발을 한 번의 관측으로 잡기 위한 것이다(docs/queue-recovery.md §8).
+            // 10분 간격에서는 버스가 관측 사이에 5~7정류장을 지나 정류장 단위 승차량을 읽을 수 없다.
+            // 배치 근거는 만석 분포 실측(RUNNING.md)과 필드 기록 시각이다. 아침 절정 07:00-08:00과
+            // 범계역 기록(08:37), 저녁 절정 18:00-18:30과 판교역 기록(18:57)이 모두 안에 들어온다.
+            // 전 피크를 60초로 돌리면 API 한도(기능당 1,000콜/일)에 육박하므로 핵심 시간대에만 적용한다.
+            const peakIntervalSeconds = 600;
+            const denseIntervalSeconds = 60;
+            const weekdayWindows = [[390, 600, 420, 540], [1050, 1230, 1080, 1170]];
+            const weekendWindows = [];
+
+            const seoulClock = (atMs) => new Date(atMs + 9 * 3600 * 1000);
+            const windowsFor = (shifted) => (shifted.getUTCDay() === 0 || shifted.getUTCDay() === 6 ? weekendWindows : weekdayWindows);
+            const clockMinutes = (shifted) => shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
+
             // 시동 크론이 스로틀돼도, 창 시작 60분 전 이후에 도착한 어떤 실행이든 창을 이어받는다.
             function activeWindow() {
-              const shifted = new Date(Date.now() + 9 * 3600 * 1000);
-              const day = shifted.getUTCDay();
-              const minutes = shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
-              const windows = day === 0 || day === 6 ? [] : [[390, 600], [1050, 1230]];
-              const found = windows.find(([start, end]) => minutes >= start - 60 && minutes < end);
+              const shifted = seoulClock(Date.now());
+              const minutes = clockMinutes(shifted);
+              const found = windowsFor(shifted).find(([start, end]) => minutes >= start - 60 && minutes < end);
               if (!found) return null;
               const kstMidnightMs = shifted.setUTCHours(0, 0, 0, 0);
               return {
                 startMs: kstMidnightMs + found[0] * 60000 - 9 * 3600 * 1000,
                 endMs: kstMidnightMs + found[1] * 60000 - 9 * 3600 * 1000,
               };
+            }
+
+            // 루프가 조밀 구간을 넘나들 수 있으므로 간격은 사이클마다 다시 정한다.
+            function scheduledIntervalSeconds(atMs) {
+              const shifted = seoulClock(atMs);
+              const minutes = clockMinutes(shifted);
+              const found = windowsFor(shifted).find(([start, end]) => minutes >= start && minutes < end);
+              if (!found) return peakIntervalSeconds;
+              const [, , denseStart, denseEnd] = found;
+              const dense = denseStart !== undefined && minutes >= denseStart && minutes < denseEnd;
+              return dense ? denseIntervalSeconds : peakIntervalSeconds;
             }
 
             // 스냅샷 운행 시간대 (KST): 평일 05:00-21:00, 주말 06:00-23:00 정시 스냅샷.
@@ -207,18 +231,18 @@ jobs:
 
             let loopStartMs = Date.now();
             let loopEndMs = Date.now();
-            let intervalSeconds = 600;
+            let eventIntervalSeconds = null;
             const eventDuration = Number(process.env.EVENT_DURATION_MINUTES || '');
             if (eventDuration > 0) {
               loopEndMs = Date.now() + eventDuration * 60000;
-              intervalSeconds = Number(process.env.EVENT_INTERVAL_SECONDS || '') || 300;
-              core.info(`이벤트 모드: ${eventDuration}분 동안 ${intervalSeconds}초 간격 수집`);
+              eventIntervalSeconds = Number(process.env.EVENT_INTERVAL_SECONDS || '') || 300;
+              core.info(`이벤트 모드: ${eventDuration}분 동안 ${eventIntervalSeconds}초 간격 수집`);
             } else {
               const window = activeWindow();
               if (window) {
                 loopStartMs = window.startMs;
                 loopEndMs = window.endMs;
-                core.info(`피크 창 수집: ${new Date(window.endMs).toISOString()}까지 ${intervalSeconds}초 간격`);
+                core.info(`피크 창 수집: ${new Date(window.endMs).toISOString()}까지 ${peakIntervalSeconds}초 간격, 조밀 구간은 ${denseIntervalSeconds}초`);
               } else if (withinServiceHours()) {
                 core.info('비피크: 1회 스냅샷만 수집');
               } else {
@@ -291,6 +315,7 @@ jobs:
                 await sleep(loopStartMs - now);
                 continue;
               }
+              const intervalSeconds = eventIntervalSeconds ?? scheduledIntervalSeconds(now);
               if (now + intervalSeconds * 1000 >= loopEndMs) break;
               await sleep(intervalSeconds * 1000);
             } while (Date.now() < loopEndMs);
