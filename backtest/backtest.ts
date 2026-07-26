@@ -1,7 +1,8 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readRouteCache, readSnapshot, type RouteCache, type Snapshot } from '../shared/model.js';
+import { type Snapshot } from '../shared/model.js';
+import { loadRouteCaches, loadSnapshots } from './data-source.js';
 import {
   applyNetDemand,
   buildDeconvolvedProfileRoute,
@@ -29,50 +30,18 @@ const projectRoot = path.resolve(currentDirectory, '..', '..');
 
 interface Options {
   dataDirectory: string;
+  scorecardPath: string | null;
 }
 
 function readArguments(argumentsList: string[]): Options {
   let dataDirectory = path.join(projectRoot, 'bus-seat-collector', 'data');
+  let scorecardPath: string | null = null;
   for (const argument of argumentsList) {
     const [name, value] = argument.split('=', 2);
     if (name === '--data-dir' && value) dataDirectory = path.resolve(value);
+    if (name === '--json' && value) scorecardPath = path.resolve(value);
   }
-  return { dataDirectory };
-}
-
-function parseSnapshots(fileText: string): Snapshot[] {
-  return fileText.split('\n').flatMap((line) => {
-    if (!line.trim()) return [];
-    try {
-      const snapshot = readSnapshot(JSON.parse(line) as unknown);
-      return snapshot ? [snapshot] : [];
-    } catch {
-      return [];
-    }
-  });
-}
-
-async function loadRouteCaches(dataDirectory: string): Promise<RouteCache[]> {
-  const routesDirectory = path.join(dataDirectory, 'routes');
-  const fileNames = await readdir(routesDirectory);
-  const caches: RouteCache[] = [];
-  for (const fileName of fileNames.filter((name) => name.endsWith('-stops.json'))) {
-    const cache = readRouteCache(JSON.parse(await readFile(path.join(routesDirectory, fileName), 'utf8')) as unknown);
-    if (cache) caches.push(cache);
-  }
-  return caches;
-}
-
-async function loadSnapshots(dataDirectory: string, routeName: string): Promise<Snapshot[]> {
-  const snapshotsDirectory = path.join(dataDirectory, 'snapshots');
-  const fileNames = (await readdir(snapshotsDirectory))
-    .filter((name) => name.startsWith(`${routeName}-`) && name.endsWith('.jsonl'))
-    .sort();
-  const snapshots: Snapshot[] = [];
-  for (const fileName of fileNames) {
-    for (const snapshot of parseSnapshots(await readFile(path.join(snapshotsDirectory, fileName), 'utf8'))) snapshots.push(snapshot);
-  }
-  return snapshots;
+  return { dataDirectory, scorecardPath };
 }
 
 type ModelKey = 'naive-persist' | 'profile-propagate' | 'profile-deconv' | 'uniform-arrival' | 'deconv-arrival' | 'full-frequency' | 'conservative';
@@ -122,6 +91,28 @@ function accumulate(target: Accumulator, prediction: Prediction, actualSeats: nu
     target.intervalN += 1;
     if (actualSeats >= prediction.low && actualSeats <= prediction.high) target.covered += 1;
   }
+}
+
+interface ModelMetrics {
+  pairs: number;
+  pointPairs: number;
+  intervalPairs: number;
+  mae: number | null;
+  brier: number;
+  coverage: number | null;
+}
+
+function metricsFor(instances: Instance[], model: ModelKey): ModelMetrics {
+  const accumulator = emptyAccumulator();
+  for (const instance of instances) accumulate(accumulator, instance.predictions[model], instance.actualSeats, instance.actualFull);
+  return {
+    pairs: accumulator.n,
+    pointPairs: accumulator.pointN,
+    intervalPairs: accumulator.intervalN,
+    mae: accumulator.pointN > 0 ? accumulator.absError / accumulator.pointN : null,
+    brier: accumulator.n > 0 ? accumulator.brier / accumulator.n : 0,
+    coverage: accumulator.intervalN > 0 ? accumulator.covered / accumulator.intervalN : null,
+  };
 }
 
 function routeFullRate(history: ReturnType<typeof buildHistoryRoute>): number {
@@ -232,6 +223,33 @@ function runFold(snapshotsByRoute: Map<string, Snapshot[]>, stopsByRoute: Map<st
   return { testDate, trainDates, instances };
 }
 
+// build-data.ts가 화면에 배포하는 조합. 여기를 바꾸면 build-data.ts의 프로파일 산출도 같이 바꾼다.
+const shippedModel: ModelKey = 'deconv-arrival';
+const baselineModel: ModelKey = 'naive-persist';
+
+// 자동 검증용 기계 판독 성적표. 폴드 하나가 하루이므로 folds 배열이 곧 정확도 추이다.
+function buildScorecard(folds: FoldResult[]) {
+  const pooled = folds.flatMap((fold) => fold.instances);
+  const byModel = (instances: Instance[]) => Object.fromEntries(MODELS.map((model) => [model, metricsFor(instances, model)]));
+  return {
+    generatedAt: new Date().toISOString(),
+    shippedModel,
+    baselineModel,
+    pooled: {
+      pairs: pooled.length,
+      fullCount: pooled.filter((instance) => instance.actualFull).length,
+      models: byModel(pooled),
+    },
+    folds: folds.map((fold) => ({
+      testDate: fold.testDate,
+      trainDates: fold.trainDates,
+      pairs: fold.instances.length,
+      fullCount: fold.instances.filter((instance) => instance.actualFull).length,
+      models: byModel(fold.instances),
+    })),
+  };
+}
+
 function report(folds: FoldResult[]): void {
   const capacity = defaultSeatCapacity;
   const pooled: Instance[] = folds.flatMap((fold) => fold.instances);
@@ -257,11 +275,7 @@ function report(folds: FoldResult[]): void {
     const subset = label === 'all' ? pooled : pooled.filter((instance) => horizonLabel(instance.horizonStops) === label);
     if (subset.length === 0) continue;
     const keys: ModelKey[] = ['naive-persist', 'profile-propagate', 'profile-deconv', 'uniform-arrival', 'deconv-arrival'];
-    const maes = keys.map((key) => {
-      const accumulator = emptyAccumulator();
-      for (const instance of subset) accumulate(accumulator, instance.predictions[key], instance.actualSeats, instance.actualFull);
-      return accumulator.absError / accumulator.pointN;
-    });
+    const maes = keys.map((key) => metricsFor(subset, key).mae ?? Number.NaN);
     const minValue = Math.min(...maes);
     const cells = maes.map((value, index) => (value.toFixed(3) + (value === minValue ? '*' : '')).padStart(index === 0 ? 9 : 10));
     console.log(`${label.padEnd(8)} ${String(subset.length).padStart(6)}  ${cells.join(' ')}`);
@@ -269,20 +283,14 @@ function report(folds: FoldResult[]): void {
 
   // 만석 사건 Brier (전 후보) + 예측구간 포함률
   console.log('\n── 만석 사건 Brier score (낮을수록 좋음) ──────────────────');
-  const accumulators = new Map<ModelKey, Accumulator>();
-  for (const model of MODELS) accumulators.set(model, emptyAccumulator());
-  for (const instance of pooled) {
-    for (const model of MODELS) accumulate(accumulators.get(model)!, instance.predictions[model], instance.actualSeats, instance.actualFull);
-  }
+  const pooledMetrics = new Map<ModelKey, ModelMetrics>(MODELS.map((model) => [model, metricsFor(pooled, model)]));
   for (const model of MODELS) {
-    const accumulator = accumulators.get(model)!;
-    const brier = accumulator.brier / accumulator.n;
-    console.log(`  ${model.padEnd(20)} Brier ${brier.toFixed(4)}`);
+    console.log(`  ${model.padEnd(20)} Brier ${pooledMetrics.get(model)!.brier.toFixed(4)}`);
   }
   console.log('');
   for (const key of ['profile-propagate', 'profile-deconv', 'uniform-arrival', 'deconv-arrival'] as const) {
-    const accumulator = accumulators.get(key)!;
-    console.log(`  ${key.padEnd(20)} 예측구간 포함률 ${(accumulator.covered / accumulator.intervalN * 100).toFixed(1)}% (n=${accumulator.intervalN}, 목표 80%)`);
+    const metrics = pooledMetrics.get(key)!;
+    console.log(`  ${key.padEnd(20)} 예측구간 포함률 ${((metrics.coverage ?? 0) * 100).toFixed(1)}% (n=${metrics.intervalPairs}, 목표 80%)`);
   }
 
   // 만석확률 보정 (프로파일 4종)
@@ -342,6 +350,11 @@ async function main(): Promise<void> {
     return;
   }
   report(folds);
+
+  if (options.scorecardPath) {
+    await writeFile(options.scorecardPath, `${JSON.stringify(buildScorecard(folds), null, 2)}\n`);
+    console.log(`\n성적표 저장: ${options.scorecardPath}`);
+  }
 }
 
 main().catch((error: unknown) => {

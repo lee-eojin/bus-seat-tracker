@@ -35,11 +35,34 @@ jobs:
             git checkout --quiet FETCH_HEAD
           fi
 
+      # 라이브 예측 로그는 차량 가명 ID를 담으므로 발행 대상 밖, 비공개 저장소의 전용 브랜치에만 쌓는다.
+      - name: Clone prediction log
+        run: |
+          url="https://x-access-token:${{ secrets.BUS_DATA_REPO_TOKEN }}@github.com/lee-eojin/bus-seat-tracker-data.git"
+          if ! git clone --quiet --depth 1 --single-branch --branch predictions "$url" ../bus-predictions; then
+            git clone --quiet --depth 1 "$url" ../bus-predictions
+            git -C ../bus-predictions checkout --quiet --orphan predictions
+            git -C ../bus-predictions rm -rf --quiet . || true
+          fi
+
       - run: npm ci
 
       - run: npm run build
 
-      - run: npm run build:data -- --data-dir=../bus-data/data
+      - run: npm run build:data -- --data-dir=../bus-data/data --predictions=../bus-predictions/predictions/$(TZ=Asia/Seoul date +%F).jsonl
+
+      - name: Append prediction log
+        run: |
+          cd ../bus-predictions
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add predictions
+          if git diff --cached --quiet; then
+            echo '기록할 예측이 없습니다'
+            exit 0
+          fi
+          git commit --quiet -m "predictions: $(date -u +%FT%TZ)"
+          git push --quiet origin predictions
 
       - name: Assemble site
         run: |

@@ -1,8 +1,8 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readRouteCache, readSnapshot, type DailyBuckets, type Direction, type HistoryRoute, type LatestPayload, type LatestRoute, type ProfileRoute, type RouteCache, type Snapshot, type VehicleSnapshot } from '../shared/model.js';
-import { buildHistoryRoute, buildProfileRoute } from '../shared/profile.js';
+import { applyNetDemand, buildDeconvolvedProfileRoute, buildHistoryRoute, distributionMean, netDemandAt, pointDistribution } from '../shared/profile.js';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(currentDirectory, '..', '..');
@@ -14,7 +14,13 @@ interface BuildOptions {
   help: boolean;
   dataDirectory: string | null;
   date: string | null;
+  predictionLog: string | null;
 }
+
+// app.ts forecastVehicle과 같은 값을 유지한다. 바꾸면 두 곳을 같이 바꾼다.
+const minutesPerStop = 2;
+// 기록할 지평(정류장 수). 백테스트의 horizon 구간(1-2 / 3-5 / 6+)에 하나씩 대응시킨다.
+const loggedHorizons = [1, 3, 6];
 
 interface Observation {
   sequence: number;
@@ -32,13 +38,14 @@ interface MutableSeatBucket {
 }
 
 function readArguments(argumentsList: string[]): BuildOptions {
-  const options: BuildOptions = { watch: false, help: false, dataDirectory: null, date: null };
+  const options: BuildOptions = { watch: false, help: false, dataDirectory: null, date: null, predictionLog: null };
   for (const argument of argumentsList) {
     const [name, value] = argument.split('=', 2);
     if (name === '--watch') options.watch = true;
     if (name === '--help') options.help = true;
     if (name === '--data-dir' && value) options.dataDirectory = path.resolve(value);
     if (name === '--date' && value) options.date = value;
+    if (name === '--predictions' && value) options.predictionLog = path.resolve(value);
   }
   return options;
 }
@@ -48,8 +55,11 @@ function printHelp(): void {
   npm run build:data
   npm run build:data -- --data-dir=../private-data --watch
   npm run build:data -- --date=2026-07-16
+  npm run build:data -- --predictions=../bus-predictions/predictions/2026-07-26.jsonl
 
-수집기 JSONL을 읽어 prototype-bus/data/latest.js와 daily.js를 생성합니다.`);
+수집기 JSONL을 읽어 prototype-bus/data/latest.js와 daily.js를 생성합니다.
+--predictions를 주면 지금 화면에 나갈 예측을 JSONL로 덧붙입니다. 차량 가명 ID가 들어가므로
+발행 대상 디렉터리 밖(비공개 저장소)을 가리켜야 합니다.`);
 }
 
 function isMissingFile(error: unknown): boolean {
@@ -219,23 +229,111 @@ async function writeGlobalScript(fileName: string, globalName: '__LATEST__' | '_
   await writeFile(path.join(outputDirectory, fileName), `window.${globalName} = ${JSON.stringify(payload)};\n`);
 }
 
-async function buildOnce(dataDirectory: string, targetDate: string): Promise<void> {
+interface PredictionRow {
+  at: string;
+  route: string;
+  vehicle: string;
+  from: number;
+  fromSeats: number;
+  target: number;
+  horizon: number;
+  seats: number;
+  boardable: number;
+  lowConfidence: boolean;
+}
+
+function bucketAtMinutesAhead(baseMs: number, minutesAhead: number): { bucket: number; weekend: boolean } {
+  const seoulClock = new Date(baseMs + minutesAhead * 60_000 + 9 * 3600 * 1000);
+  const day = seoulClock.getUTCDay();
+  return {
+    bucket: seoulClock.getUTCHours() * 2 + (seoulClock.getUTCMinutes() >= 30 ? 1 : 0),
+    weekend: day === 0 || day === 6,
+  };
+}
+
+// 화면이 지금 내보내는 예측을 그대로 남긴다. 다음 날 실제 관측과 대조하면 재현 채점(백테스트)이
+// 잡지 못하는 파이프라인 문제 — 낡은 프로파일, 멈춘 발행 — 가 드러난다.
+// 차량 가명 ID가 들어가므로 이 파일은 비공개 저장소에만 쓴다 (RUNNING.md 데이터 경계).
+function forecastRows(cache: RouteCache, snapshot: Snapshot | null, profile: ProfileRoute, generatedAt: string): PredictionRow[] {
+  if (!snapshot) return [];
+  const baseMs = Date.parse(generatedAt);
+  const turnSequence = findTurnSequence(cache.stops);
+  const sequences = cache.stops.map((stop) => stop.sequence).sort((left, right) => left - right);
+  const deepest = Math.max(...loggedHorizons);
+  const rows: PredictionRow[] = [];
+
+  for (const vehicle of snapshot.vehicles) {
+    if (vehicle.id === null || vehicle.currentStopSequence === null) continue;
+    if (vehicle.remainingSeats === null || vehicle.remainingSeats < 0) continue;
+    // 화면은 같은 방향 정류장만 늘어놓으므로 회차점 너머는 세지 않는다.
+    const heading = directionOf(vehicle.currentStopSequence, turnSequence);
+
+    // 도착 귀속: 표시 잔여석은 현재 정류장 '도착(승차 반영 전)' 상태이므로
+    // 하류 예측은 현재 정류장 승차부터 반영한다 (검증 보고서 §5·§9-1).
+    const nowBucket = bucketAtMinutesAhead(baseMs, 0);
+    const boardingHere = netDemandAt(profile, vehicle.currentStopSequence, nowBucket.bucket, nowBucket.weekend);
+    let distribution = applyNetDemand(pointDistribution(vehicle.remainingSeats), boardingHere);
+    let lowConfidence = boardingHere.lowConfidence;
+    let stopsAhead = 0;
+    for (const sequence of sequences) {
+      if (sequence <= vehicle.currentStopSequence) continue;
+      if (directionOf(sequence, turnSequence) !== heading) break;
+      stopsAhead += 1;
+      const arrivalMean = distributionMean(distribution);
+      const timeBucket = bucketAtMinutesAhead(baseMs, stopsAhead * minutesPerStop);
+      const estimate = netDemandAt(profile, sequence, timeBucket.bucket, timeBucket.weekend);
+      lowConfidence = lowConfidence || estimate.lowConfidence;
+      distribution = applyNetDemand(distribution, estimate);
+      if (loggedHorizons.includes(stopsAhead)) {
+        rows.push({
+          at: generatedAt,
+          route: cache.route.name,
+          vehicle: vehicle.id,
+          from: vehicle.currentStopSequence,
+          fromSeats: vehicle.remainingSeats,
+          target: sequence,
+          horizon: stopsAhead,
+          seats: Number(arrivalMean.toFixed(2)),
+          boardable: Number((1 - (distribution[0] ?? 0)).toFixed(4)),
+          lowConfidence,
+        });
+      }
+      if (stopsAhead >= deepest) break;
+    }
+  }
+  return rows;
+}
+
+async function buildOnce(dataDirectory: string, targetDate: string, predictionLog: string | null): Promise<void> {
   const caches = await loadRouteCaches(dataDirectory);
   const latestRoutes: LatestRoute[] = [];
   const dailyDays: Record<string, { [date: string]: { bySeqHour: DailyBuckets } }> = {};
   const historyRoutes: Record<string, HistoryRoute> = {};
   const profileRoutes: Record<string, ProfileRoute> = {};
+  const generatedAt = new Date().toISOString();
+  const predictions: PredictionRow[] = [];
 
   for (const cache of caches) {
     const snapshotFiles = await listSnapshotFiles(dataDirectory, cache.route.name);
-    latestRoutes.push(buildLatestRoute(cache, await findLatestSnapshot(snapshotFiles)));
+    const latestSnapshot = await findLatestSnapshot(snapshotFiles);
+    latestRoutes.push(buildLatestRoute(cache, latestSnapshot));
     dailyDays[cache.route.name] = { [targetDate]: { bySeqHour: await buildDailyRoute(snapshotFiles, targetDate) } };
     const snapshots = await loadSnapshots(snapshotFiles);
     historyRoutes[cache.route.name] = buildHistoryRoute(snapshots);
-    profileRoutes[cache.route.name] = buildProfileRoute(snapshots);
+    // 구간합 역산 + 도착 귀속. 균등 배분(1/n)이 정류장 스파이크를 뭉개고 핫스팟을 한 칸
+    // 하류로 밀던 문제를 제거한 조합이다 (검증 보고서 §5~§7, §9-1).
+    const profile = buildDeconvolvedProfileRoute(snapshots, undefined, 'arrival');
+    profileRoutes[cache.route.name] = profile;
+    if (predictionLog) predictions.push(...forecastRows(cache, latestSnapshot, profile, generatedAt));
   }
 
-  const latest: LatestPayload = { generatedAt: new Date().toISOString(), routes: latestRoutes };
+  if (predictionLog && predictions.length > 0) {
+    await mkdir(path.dirname(predictionLog), { recursive: true });
+    await appendFile(predictionLog, `${predictions.map((row) => JSON.stringify(row)).join('\n')}\n`);
+    console.log(`예측 기록 ${predictions.length}건 → ${predictionLog}`);
+  }
+
+  const latest: LatestPayload = { generatedAt, routes: latestRoutes };
   await writeGlobalScript('latest.js', '__LATEST__', latest);
   await writeGlobalScript('daily.js', '__DAILY__', { generatedAt: latest.generatedAt, days: dailyDays });
   await writeGlobalScript('history.js', '__HISTORY__', { generatedAt: latest.generatedAt, routes: historyRoutes });
@@ -251,10 +349,10 @@ async function main(): Promise<void> {
   }
   const dataDirectory = options.dataDirectory ?? defaultDataDirectory;
   const targetDate = options.date ?? toSeoulParts(new Date().toISOString()).date;
-  await buildOnce(dataDirectory, targetDate);
+  await buildOnce(dataDirectory, targetDate, options.predictionLog);
   if (!options.watch) return;
   setInterval(() => {
-    void buildOnce(dataDirectory, options.date ?? toSeoulParts(new Date().toISOString()).date).catch((error: unknown) => {
+    void buildOnce(dataDirectory, options.date ?? toSeoulParts(new Date().toISOString()).date, options.predictionLog).catch((error: unknown) => {
       console.error(`집계 실패: ${error instanceof Error ? error.message : String(error)}`);
     });
   }, 60_000);

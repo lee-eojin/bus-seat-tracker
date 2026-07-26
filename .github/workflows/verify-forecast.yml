@@ -1,0 +1,181 @@
+name: Verify forecast
+
+# 층-1 좌석 예보를 매일 스스로 채점한다.
+# rolling-origin 백테스트는 테스트일 이전 날짜로만 학습하므로, 폴드 하나가 곧
+# "그날의 전방 예측이 실제와 얼마나 맞았는가"이고 folds 배열이 정확도 추이가 된다.
+# 정답은 데이터가 스스로 준다(self-supervised) — 별도 라벨링이 필요 없다.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 19 * * *'  # KST 04:00. 전날 수집분이 main에 아카이브된 뒤에 돈다.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: forecast-verification
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Clone snapshot data
+        run: git clone --depth 1 "https://x-access-token:${{ secrets.BUS_DATA_REPO_TOKEN }}@github.com/lee-eojin/bus-seat-tracker-data.git" ../bus-data
+
+      # 아직 예측 브랜치가 없을 수 있다(첫 발행 전). 없으면 라이브 채점만 건너뛴다.
+      - name: Clone prediction log
+        id: predictions
+        continue-on-error: true
+        run: git clone --quiet --depth 1 --single-branch --branch predictions "https://x-access-token:${{ secrets.BUS_DATA_REPO_TOKEN }}@github.com/lee-eojin/bus-seat-tracker-data.git" ../bus-predictions
+
+      - run: npm ci
+
+      - name: Run rolling-origin backtest
+        run: npm run backtest -- --data-dir=../bus-data/data --json=scorecard.json
+
+      - name: Score live predictions
+        if: steps.predictions.outcome == 'success'
+        run: |
+          target="$(TZ=Asia/Seoul date -d yesterday +%F)"
+          echo "채점 대상일: $target"
+          npm run score -- --data-dir=../bus-data/data --predictions-dir=../bus-predictions/predictions --date="$target" --json=live-score.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scorecard
+          path: |
+            scorecard.json
+            live-score.json
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Summarize and guard
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('node:fs');
+            if (!fs.existsSync('scorecard.json')) {
+              core.warning('성적표가 없습니다. 평일 표본이 2일 미만이면 폴드를 만들 수 없습니다.');
+              return;
+            }
+
+            const card = JSON.parse(fs.readFileSync('scorecard.json', 'utf8'));
+            const shipped = card.shippedModel;
+            const baseline = card.baselineModel;
+            const show = (value, digits) => (value === null || value === undefined ? '—' : value.toFixed(digits));
+
+            core.summary.addHeading('층-1 좌석 예보 자동 검증', 2);
+            core.summary.addRaw(
+              `배포 조합 \`${shipped}\` · 기준선 \`${baseline}\` · 폴드 ${card.folds.length}개 · 관측쌍 ${card.pooled.pairs}건 (실제 만석 ${card.pooled.fullCount}건)\n\n`,
+            );
+
+            core.summary.addHeading('날짜별 도착 좌석 MAE', 3);
+            core.summary.addTable([
+              ['테스트일', '관측쌍', '만석', `배포(${shipped})`, '역산·도착', `기준선(${baseline})`].map((data) => ({ data, header: true })),
+              ...card.folds.map((fold) => [
+                fold.testDate,
+                String(fold.pairs),
+                String(fold.fullCount),
+                show(fold.models[shipped].mae, 2),
+                show(fold.models['deconv-arrival'].mae, 2),
+                show(fold.models[baseline].mae, 2),
+              ]),
+            ]);
+
+            core.summary.addHeading('누적 지표', 3);
+            core.summary.addTable([
+              ['조합', 'MAE', 'Brier', '예측구간 포함률 (목표 80%)'].map((data) => ({ data, header: true })),
+              ...Object.entries(card.pooled.models).map(([name, metrics]) => [
+                name,
+                show(metrics.mae, 3),
+                show(metrics.brier, 4),
+                metrics.coverage === null ? '—' : `${(metrics.coverage * 100).toFixed(1)}%`,
+              ]),
+            ]);
+
+            const newest = card.folds[card.folds.length - 1];
+            const shippedMae = newest.models[shipped].mae;
+            const baselineMae = newest.models[baseline].mae;
+            const shippedBrier = newest.models[shipped].brier;
+            const baselineBrier = newest.models[baseline].brier;
+            const coverage = card.pooled.models[shipped].coverage;
+
+            const failures = [];
+            if (shippedMae === null || baselineMae === null) {
+              core.warning('점추정이 없어 MAE 비교를 건너뜁니다.');
+            } else if (shippedMae >= baselineMae) {
+              failures.push(`최신 폴드(${newest.testDate}) MAE ${shippedMae.toFixed(2)}가 기준선 ${baselineMae.toFixed(2)} 이상입니다.`);
+            }
+            if (shippedBrier >= baselineBrier) {
+              failures.push(`최신 폴드(${newest.testDate}) Brier ${shippedBrier.toFixed(4)}가 기준선 ${baselineBrier.toFixed(4)} 이상입니다.`);
+            }
+            if (coverage !== null && coverage < 0.6) {
+              core.warning(`예측구간 포함률 ${(coverage * 100).toFixed(1)}% — 목표 80%에서 크게 벗어났습니다.`);
+            }
+
+            // 라이브 예측 채점 — 발행 시점에 화면이 실제로 내보낸 값을 나중 관측과 대조한 결과.
+            // 재현 채점이 못 잡는 파이프라인 문제(낡은 프로파일, 멈춘 발행)가 여기서 드러난다.
+            if (fs.existsSync('live-score.json')) {
+              const live = JSON.parse(fs.readFileSync('live-score.json', 'utf8'));
+              core.summary.addHeading(`라이브 예측 채점 (${live.date})`, 3);
+              core.summary.addRaw(
+                `예측 ${live.predictions}건 · 대조 성공 ${live.scored}건 (${(live.matchRate * 100).toFixed(1)}%) · ` +
+                `근거 관측이 낡은 예측 ${live.staleBasis}건 · 근거 미확인 ${live.unknownBasis}건\n\n`,
+              );
+              const rows = Object.entries(live.byHorizon).filter(([, m]) => m.pairs > 0);
+              if (rows.length > 0) {
+                core.summary.addTable([
+                  ['지평(정류장)', 'n', 'MAE', '편향', '탑승가능 Brier'].map((data) => ({ data, header: true })),
+                  ...rows.map(([horizon, m]) => [
+                    horizon, String(m.pairs), show(m.mae, 2), show(m.bias, 2), show(m.boardableBrier, 4),
+                  ]),
+                ]);
+              }
+              if (live.staleBasis > 0) {
+                failures.push(`라이브 예측 ${live.staleBasis}건이 낡은 관측을 근거로 발행됐습니다. 수집 또는 발행 파이프라인을 확인하세요.`);
+              }
+              if (live.predictions > 0 && live.matchRate < 0.02) {
+                core.warning(`대조율 ${(live.matchRate * 100).toFixed(1)}% — 샘플링이 대상 정류장을 거의 놓치고 있습니다.`);
+              }
+            } else {
+              core.summary.addRaw('\n라이브 예측 기록이 아직 없습니다 (첫 발행 전이거나 대상일 기록 없음).\n');
+            }
+
+            core.summary.addRaw(
+              '\n> 재현 채점(백테스트)은 구간합 지표만 본다. 정류장 단위 수요 배분의 차이(검증 보고서 §4·§7)와\n' +
+              '> 만석 검열로 가려진 초과 수요(`docs/queue-recovery.md` §1)는 여기에 나타나지 않는다.\n',
+            );
+            await core.summary.write();
+
+            if (failures.length > 0) core.setFailed(failures.join(' / '));
+
+      # 채점이 끝난 예측은 보관 가치가 없다. 파일명이 KST 날짜라 이름으로 자른다.
+      - name: Prune scored predictions
+        if: always() && steps.predictions.outcome == 'success'
+        run: |
+          cd ../bus-predictions
+          cutoff="$(TZ=Asia/Seoul date -d '7 days ago' +%F)"
+          for file in predictions/*.jsonl; do
+            [ -e "$file" ] || continue
+            name="$(basename "$file" .jsonl)"
+            if [[ "$name" < "$cutoff" ]]; then git rm --quiet "$file"; fi
+          done
+          if git diff --cached --quiet; then
+            echo '삭제할 기록이 없습니다'
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --quiet -m "predictions: prune before $cutoff"
+          git push --quiet origin predictions
