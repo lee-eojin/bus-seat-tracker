@@ -1,59 +1,140 @@
 # bus-seat-tracker
 
-경기도 직행좌석버스의 차량별 빈자리 관측치를 수집하고, 노선 축에서 좌석 상태를 보여 주는 TypeScript 프로젝트다.
+경기도 직행좌석버스가 **내 정류장에 도착할 때 몇 석 남아 있을지**를 예보하고, 그 좌석으로 탈 수 있을지를 판정하는 프로젝트다.
 
-가까운 정류장이 항상 좋은 선택은 아니다. 이 프로젝트는 노선 위에서 좌석이 소진되는 위치를 관찰해, 만차 전에 탈 수 있는 선택지를 이해하는 데 초점을 둔다.
+직행좌석버스는 입석이 없다. 좌석이 0이면 그 버스는 그냥 지나간다. 그래서 "지금 몇 석"이 아니라 "내 앞에 설 때 몇 석"이 필요하고, 남은 좌석보다 **내 앞에 몇 명이 서 있느냐**가 더 중요할 때가 많다.
 
-## 구성
+기존 지도 앱은 현재 잔여석만 보여 준다. 이 프로젝트는 세 가지를 더 한다.
+
+| | |
+|---|---|
+| **도착 시점 좌석 예보** | 상류 정류장의 승하차를 전파해 도착 시점 좌석 분포를 낸다 |
+| **탑승 가능성 판정** | 예상 좌석과 그 시간대 수요, 직전 버스들의 만석 여부를 함께 보고 여유·빠듯·어려움으로 답한다 |
+| **어디서 탈지** | 만차 전에 탈 수 있는 상류 정류장을 노선 축 위에서 제시한다 |
+
+관측이 부족한 구간에서는 예측을 내지 않고 그렇다고 표시한다. 틀린 확신보다 보류가 낫다.
+
+## 어떻게 도는가
 
 ```
-bus-seat-collector/collector.ts  GBIS API → 로컬 JSONL 스냅샷
-prototype-bus/build-data.ts      JSONL → 브라우저용 최신·일별 데이터
-prototype-bus/app.ts             노선 축 UI
-shared/model.ts                  API 경계를 통과한 도메인 모델
+GBIS API ──> collector ──> bus-seat-tracker-data (비공개, JSONL)
+                                   │
+                    build-data ────┤  프로파일·히스토리·최신 스냅샷을 브라우저 번들로
+                                   │
+        정적 화면 ─────────────────┘
+             │
+             └── /api/live (서버 프록시) ──> GBIS 실시간 잔여석
 ```
 
-공개 저장소에는 API 키, 원문 차량 번호, 수집 데이터, 빌드 산출물을 넣지 않는다. 차량별 원본 스냅샷은 `bus-seat-tracker-data` 비공개 저장소에만 저장하고, 가명화에는 API 키와 분리한 HMAC 시크릿을 쓴다.
+화면의 예보 계산은 브라우저에서 돈다. 서버는 GBIS 키를 감추는 프록시 하나뿐이다.
+
+## 모델
+
+좌석 관측은 수요가 아니라 **공급의 그림자**를 본다. 만석 버스가 지나가면 못 탄 사람은 데이터에 남지 않는다. 이 검열(censoring)을 다루는 것이 모델의 중심이다.
+
+- **순수요 프로파일**: 구간합으로만 관측되는 승하차를 정류장 단위로 역산한다 (`shared/profile.ts`, ridge 좌표하강)
+- **좌석 분포 전파**: 점추정이 아니라 분포를 상류에서 하류로 옮긴다. 좌석 상한에서 잘리는 것이 곧 검열이다
+- **대기 인원 복원**: 좌석을 남기고 떠난 버스는 그 순간 줄이 비었다는 뜻이다. 이 해소 사건들 사이의 보존식으로 도착률을 식별한다 (`docs/queue-recovery.md`)
+
+### 검증된 성과 (`docs/validation-2026-07-24.md`)
+
+| 지표 | 이 모델 | 기준선 |
+|---|---|---|
+| 도착 좌석 MAE | **4.34석** | naive-persist 6.91 |
+| 만석 Brier | **0.046** | 만석빈도 0.070 / naive 0.083 |
+| 예측구간 포함률 | 74.9% | 목표 80% — 구간이 좁다 |
+
+대기 인원 복원은 2026-07-24 저녁 판교역에서 좌석 데이터만으로 **36.3~55.0명** 구간을 냈고, 같은 시각 현장 실측 하한이 38명이었다. 필드 기록은 계산에 넣지 않았다.
+
+다만 **대기 인원 예측기는 아직 서비스에 쓰지 않는다.** 도착률의 날짜 간 분산을 측정하지 못했다. 사후 재구성만 가능하다 (`docs/queue-recovery.md` §7, §11).
 
 ## 시작하기
 
-Node.js 22 이상과 npm이 필요하다.
+Node.js 22 이상.
 
 ```bash
 npm install
 cp bus-seat-collector/.env.example bus-seat-collector/.env
-# bus-seat-collector/.env에 GYEONGGI_BUS_API_KEY 입력
+# GYEONGGI_BUS_API_KEY 입력
 
 npm run collect -- --once
 npm run build:data
 open prototype-bus/index.html
 ```
 
-`npm run typecheck`은 산출물 없이 타입만 검사하고, `npm run build`는 `dist/`에 JavaScript를 만든다.
+| 명령 | 하는 일 |
+|---|---|
+| `npm run typecheck` | 산출물 없이 타입 검사 |
+| `npm run build` | `dist/`에 JavaScript |
+| `npm run backtest` | rolling-origin 백테스트 |
+| `npm run score` | 발행된 라이브 예측을 나중 관측과 대조 |
+| `npm run queue` | 대기 인원 복원 (`--all-stops`, `--verdict`) |
+| `npm run build:site` | 배포용 정적 번들 → `site/` |
 
-## 실시간 좌석 오버레이 (선택)
+## 실시간 좌석
 
-`prototype-bus/data/config.js`에 GBIS 인증키를 넣으면 화면이 60초마다 잔여석을 직접 조회해 스냅샷 위에 덮어쓴다. `prototype-bus/data/`는 gitignore 대상이라 키가 저장소에 올라가지 않는다.
+`GET /api/live?route=3330`
 
-```js
-window.__CONFIG__ = { gbisApiKey: '공공데이터포털에서 발급한 인증키' };
+```json
+{ "routeName": "3330", "routeId": "204000057", "apiQueryTime": "20260727083000",
+  "vehicles": [{ "id": "...", "currentStopSequence": 12, "remainingSeats": 7,
+                 "crowded": 1, "status": 0 }] }
 ```
 
-키가 없으면 수집 스냅샷 표시로 동작한다. 라이브 응답의 차량번호는 표시하지도 저장하지도 않는다. 공개 배포 시에는 이 방식을 쓰면 키가 노출되므로, 그때는 프록시나 발행 주기 강화로 대체해야 한다.
+GBIS 인증키는 서버 환경변수에만 있고 브라우저로 내려가지 않는다. 응답에서 차량번호는 제거된다. 조회 가능한 노선은 `server/gbis.ts`의 화이트리스트뿐이고 그 밖은 400이다. 프록시가 실패하면 화면은 수집 스냅샷으로 되돌아간다.
 
-## 자동 수집 재가동
+캐시는 `s-maxage=120`이다. **일 호출 한도 1,000회가 이 서비스의 구속 제약**이라 노선당 2분에 1회가 상한이다 (`DEPLOY.md` §6). 이 값을 낮추기 전에 예산부터 다시 계산한다.
 
-`.github/workflows/collect-bus-seats.yml`은 통근 피크(평일 06:30~10:00, 17:30~20:30)는 10분 간격 루프로, 그 외 운행 시간대는 매시 1회로 수집하며 심야에는 쉰다. 스냅샷은 `bus-seat-tracker-data` 비공개 저장소에만 저장한다. 한국 날짜별 `collect/YYYY-MM-DD` 브랜치에 수집을 누적한 뒤, 다음 날 첫 수집에서 전날 브랜치를 `main`의 단일 아카이브 커밋으로 반영하고 삭제한다. 워크플로를 기본 브랜치에 반영한 뒤 다음 GitHub Actions Secrets를 설정해야 한다.
+## 수집
 
-- `GYEONGGI_BUS_API_KEY`: 공공데이터포털에서 재발급한 새 인증키
-- `VEHICLE_HASH_SECRET`: API 키와 무관한 임의의 긴 비밀값
-- `BUS_DATA_REPO_TOKEN`: `bus-seat-tracker-data`의 Contents 읽기·쓰기만 허용한 fine-grained PAT
+`.github/workflows/collect-bus-seats.yml` — 평일 통근 피크(06:30~10:00, 17:30~20:30)는 10분 간격 루프, 그 외 운행 시간대는 매시 1회, 심야에는 쉰다. 스냅샷은 `bus-seat-tracker-data` 비공개 저장소의 `collect/YYYY-MM-DD` 브랜치에 쌓고, 다음 날 첫 수집이 전날 브랜치를 `main`의 단일 아카이브 커밋으로 넘긴 뒤 지운다.
 
-Secrets가 준비되면 Actions의 **Collect bus seats**를 한 번 수동 실행해 비공개 저장소의 당일 `collect/YYYY-MM-DD` 브랜치에 첫 스냅샷이 쌓이는지 확인한다. 스케줄은 기본 브랜치에서만 작동한다.
+필요한 GitHub Actions Secrets:
+
+| 이름 | 용도 |
+|---|---|
+| `GYEONGGI_BUS_API_KEY` | 공공데이터포털 인증키 |
+| `VEHICLE_HASH_SECRET` | 차량 가명화용. API 키와 분리한 임의의 긴 값 |
+| `BUS_DATA_REPO_TOKEN` | `bus-seat-tracker-data` Contents **읽기·쓰기** PAT |
+
+`BUS_DATA_REPO_TOKEN`은 Vercel에도 같은 이름으로 들어가지만 그쪽은 **읽기 권한만** 있으면 된다. PAT를 재발급하면 옛 값이 즉시 죽으니 쓰는 곳을 모두 갱신한다 (`DEPLOY.md` §3).
+
+## 구성
+
+```
+bus-seat-collector/collector.ts   GBIS 수집기. 차량 ID는 HMAC 가명화
+shared/model.ts                   도메인 모델. 승차 불가 지점 판정
+shared/profile.ts                 순수요 프로파일, 구간합 역산
+shared/boarding.ts                탑승 가능성 판정 — 화면과 백테스트가 같은 규칙을 쓴다
+prototype-bus/build-data.ts       JSONL → 브라우저 데이터 번들
+prototype-bus/app.ts              노선 축 UI, 좌석 분포 전파, 추천, 길찾기
+backtest/backtest.ts              rolling-origin 백테스트
+backtest/queue-recovery.ts        대기 인원 복원
+backtest/score-predictions.ts     라이브 예측 채점
+server/gbis.ts                    GBIS 클라이언트 (서버 전용)
+api/live.ts                       Vercel 함수
+scripts/build-site.mjs            배포용 번들 조립
+```
+
+### 승차할 수 없는 정류장
+
+GBIS는 톨게이트·분기점처럼 노선이 지나가기만 하는 지점을 정류장 목록에 함께 내려주고, 이름 끝 표기로만 구분한다. **이 표기는 바뀐다** — 2026-07 중 `(경유)` → `(미정차)`로 관측됐고, 한쪽만 보던 코드가 조용히 아무것도 걸러 내지 못했다.
+
+판정은 `shared/model.ts`의 `isNonBoardingStop` 한 곳에서만 한다. 표기가 또 바뀌면 수집기가 경고한다.
+
+## 데이터 경계
+
+공개 저장소에는 API 키, 원문 차량 번호, 수집 데이터, 빌드 산출물을 넣지 않는다. 원본 스냅샷은 `bus-seat-tracker-data`에만 두고, 화면에도 차량 번호와 가명화 ID를 내보내지 않는다.
+
+## 문서
+
+| | |
+|---|---|
+| `DEPLOY.md` | 배포 절차, 호출 예산, 남은 것 |
+| `docs/queue-recovery.md` | 대기 인원 복원 방법과 그 한계 |
+| `docs/validation-2026-07-24.md` | 층-1 검증 보고서 |
+| `docs/boarding-model.md` | 탑승 모델 |
 
 ## 브랜치
 
-- `main`: 검증된 기준선
-- `dev`: TypeScript 전환과 기능 개발
-
-`dev`에서 검증한 뒤에만 `main` 반영 여부를 결정한다.
+`main`이 검증된 기준선이고 수집 워크플로 스케줄은 여기서만 작동한다. 작업은 `feature/*`에서 하고 PR로 `main`에 되돌아온다.

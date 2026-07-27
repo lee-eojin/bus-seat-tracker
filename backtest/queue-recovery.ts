@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type RouteCache } from '../shared/model.js';
+import { isNonBoardingStop, type RouteCache } from '../shared/model.js';
 import {
   applyNetDemand,
   buildDeconvolvedProfileRoute,
@@ -77,15 +77,15 @@ function readArguments(argumentsList: string[]): Options {
 const seoulHour = (time: number): number => new Date(time + 9 * 3600 * 1000).getUTCHours();
 const seoulClock = (time: number): string => new Date(time + 9 * 3600 * 1000).toISOString().slice(11, 16);
 
-// 대상 정류장 바로 뒤에 이어지는 경유지들. 승차가 없으므로 여기서 읽은 잔여석이
-// 곧 대상 정류장의 출발 상태다. 경유지가 아닌 정류장을 섞으면 하차분이 들어와
+// 대상 정류장 바로 뒤에 이어지는 미정차 지점들. 승차가 없으므로 여기서 읽은 잔여석이
+// 곧 대상 정류장의 출발 상태다. 승차 가능한 정류장을 섞으면 하차분이 들어와
 // 도착률이 음수로 나온다 (docs/queue-recovery.md §7 구현 주의).
 function passThroughAfter(cache: RouteCache, stopSequence: number): number[] {
-  const byySequence = new Map(cache.stops.map((stop) => [stop.sequence, stop.name]));
+  const byName = new Map(cache.stops.map((stop) => [stop.sequence, stop.name]));
   const sequences: number[] = [];
   for (let sequence = stopSequence + 1; ; sequence += 1) {
-    const name = byySequence.get(sequence);
-    if (!name || !name.includes('경유')) break;
+    const name = byName.get(sequence);
+    if (name === undefined || !isNonBoardingStop(name)) break;
     sequences.push(sequence);
   }
   return sequences;
@@ -263,9 +263,9 @@ async function main(): Promise<void> {
   console.log(`대기 인원 복원 · ${options.routeName} seq${options.stopSequence} ${stopName}`);
   console.log('═'.repeat(78));
   if (passThrough.length === 0) {
-    console.log('하류 경유지 없음 — 조밀 관측(같은 정류장 2회 이상)으로만 도착·출발을 읽는다.');
+    console.log('하류 미정차 지점 없음 — 조밀 관측(같은 정류장 2회 이상)으로만 도착·출발을 읽는다.');
   } else {
-    console.log(`하류 경유지: ${passThrough.join(', ')} (조밀 관측이 없을 때만 사용)`);
+    console.log(`하류 미정차 지점: ${passThrough.join(', ')} (조밀 관측이 없을 때만 사용)`);
   }
   console.log(`관측 창 ${options.fromHour}~${options.toHour}시 · 상류 대체 허용 seq${options.upstreamFrom} 이상 · 상류 오염 보정 ${options.correct ? '켬' : '끔'}`);
 
@@ -294,7 +294,7 @@ async function main(): Promise<void> {
     console.log('  seq  정류장                        구간  총승차   총분   λ(시간가중)  직독/경유지/불가');
     const rows: Array<{ sequence: number; name: string; intervals: number; boarding: number; minutes: number; lambda: number; direct: number; via: number; skipped: number }> = [];
     for (const stop of cache.stops) {
-      if ((stop.name ?? '').includes('경유')) continue;
+      if (isNonBoardingStop(stop.name)) continue;
       const stopOptions = { ...options, stopSequence: stop.sequence };
       const through = passThroughAfter(cache, stop.sequence);
       let boarding = 0;
@@ -449,7 +449,7 @@ async function main(): Promise<void> {
   console.log('확장 진단 — 출발 잔여석을 깨끗하게 읽을 수 있는 정류장');
   console.log('═'.repeat(78));
   const clean = cache.stops
-    .filter((stop) => !(stop.name ?? '').includes('경유') && passThroughAfter(cache, stop.sequence).length > 0)
+    .filter((stop) => !isNonBoardingStop(stop.name) && passThroughAfter(cache, stop.sequence).length > 0)
     .map((stop) => `seq${stop.sequence} ${stop.name}`);
   console.log(`  전체 ${cache.stops.length}개 중 ${clean.length}개`);
   for (const label of clean) console.log(`    ${label}`);

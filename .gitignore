@@ -5,3 +5,7 @@ bus-seat-collector/data/
 prototype-bus/data/
 .gstack/
 field-observations.jsonl
+site/
+.vercel
+.claude/settings.local.json
+docs/proposal.md
