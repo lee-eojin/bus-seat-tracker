@@ -8,3 +8,4 @@ field-observations.jsonl
 site/
 .vercel
 .claude/settings.local.json
+docs/proposal.md
