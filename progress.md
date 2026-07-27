@@ -53,3 +53,29 @@
   - `verdictLabel()` 제거 — `?` 접미사가 점선 테두리로 대체됨.
   - 검증: `tsc --noEmit` 통과 · CSS 중괄호 108/108 균형 · tint 4종 모두 덧붙인 규칙이 최종 적용됨(나중 규칙 승리) 확인.
   - 브라우저 확장 미연결로 실기 렌더 확인 실패 → 실제 CSS로 미리보기 페이지를 만들어 대체 검증.
+- **17:59** S3a 시안 이식 완료. 이식 중 `index.html`에 배지 CSS가 **이미 반영돼 있던 것을 모르고 중복 추가** — 선택자 122개(중복 4쌍)까지 갔다가 104개로 정리. 값이 같아 화면은 정상이었으나 한쪽만 고치면 안 먹는 함정.
+  - 실제 변경은 `app.ts` 칩 생성부(`stop-prob` 한 칸 → `verdict` 컨테이너 + 배지 + 좌석)와 푸터 문구(없어진 `?`·`*` 기호 설명 제거).
+- **17:59** S1 착수. `server/gbis.ts` + `api/live.ts` 신규, 클라이언트를 프록시로 전환.
+  - **D5 개정**: 캐시 TTL 30초 → 120초. 30초는 출퇴근 6.5시간에 1,560회로 가용분(~518회)의 3배.
+  - `plateNo` 제거를 화이트리스트 방식(필요 필드만 통과)으로 구현 — GBIS가 새 필드를 추가해도 새지 않는다.
+  - `allowedRoutes` 상수로 노선명→routeId 고정. 프록시가 `busrouteservice`를 0회 호출한다.
+  - `tsconfig.json` include에 `api/`·`server/`가 빠져 있어 첫 typecheck가 두 파일을 통째로 건너뛰었다. 추가 후 재검사.
+  - 검증 17건 통과 (`scratchpad/proxy-test.mjs`). `fetch` 스텁으로 실제 GBIS 미호출 — 테스트가 쿼터를 쓰지 않게.
+  - **미검증**: `vercel dev`(CLI 로그인 필요), 실제 키 동작(키 필요). 정적 빌드 배선은 데이터 레포 클론이 필요해 S2로 이월.
+- **18:15** S2 착수·완료. `scripts/build-site.mjs`로 정적 번들 조립을 승격 (`npm run build:site`).
+  - `publish-pages.yml`의 조립 절차를 그대로 옮김 — 산출물이 갈리면 배포본과 Pages 발행본이 달라진다.
+  - 데이터 출처 두 갈래: `BUS_DATA_DIR`(로컬) / `BUS_DATA_REPO_TOKEN`(Vercel). 토큰은 URL이 아니라 `http.extraheader`로 — URL에 넣으면 프로세스 목록과 git 로그에 남는다.
+  - `--predictions`는 빌드에서 뺐다. 비공개 저장소에 커밋을 남기는 작업이라 빌드 부수 효과가 되면 안 되고, GitHub Actions가 계속 담당한다.
+  - 로컬 실행 확인: `site/` 11개 파일 640K, `config.js` 유입 0.
+  - `publish-pages.yml`은 **교체가 아니라 병행**으로 갔다. Vercel 배포가 확인되기 전에 Pages를 지우면 되돌릴 곳이 없다.
+  - 배포 훅 스텝의 `if: ${{ secrets.X != '' }}`가 동작하지 않는 것을 발견 — `secrets` 컨텍스트는 `if:`에서 못 쓴다. env로 받아 셸에서 판정하도록 수정.
+  - `.gitignore`에 `site/` 추가.
+- **18:20** 배포 위험 하나 사전 검증: `api/live.ts`가 `../server/gbis.js`를 import하는데 esbuild가 `.js`→`.ts`를 해석하지 못하면 Vercel 함수 빌드가 깨진다. esbuild 0.24로 실제 번들해 확인 — 해석 성공, `server/`·`shared/`까지 완전 번들, 외부 의존 0, `plateNo` 미포함.
+- **18:20** `DEPLOY.md` 작성. Vercel 프로젝트 생성 → 환경변수 2개 → GitHub 시크릿 1개 → 확인 5단계 → 호출 예산 → Pages 정리 순.
+  - 확인 5단계의 핵심은 ④ '브라우저 네트워크 탭에 data.go.kr 없음' — S1의 완료 기준이자 이 배포의 존재 이유.
+  - Pages 스텝 제거는 Vercel 배포 확인 **후**로 명시. 먼저 지우면 되돌릴 곳이 없다.
+- **18:23** 법적 표기 작성 (`prototype-bus/legal.html`). 배포 차단 요소 3건 해소.
+  - 문구를 쓰기 전에 코드를 먼저 감사: localStorage 4종(목적지·승차 정류장·탑승 기록·관측 로그), `getCurrentPosition`은 네이버지도 링크 좌표로만 쓰이고 서버 미전송, 서버로 가는 값은 노선 번호뿐.
+  - 호스팅 접속 기록(Vercel)은 남는다는 사실을 숨기지 않고 명시. "아무것도 수집 안 함"은 사실이 아니다.
+  - 면책은 일반 문구 대신 실제로 갈리는 경우 4가지로 — 증차·결행, 다른 노선 대기자, 표본 부족 시간대, API 지연.
+  - `build-site.mjs`와 `publish-pages.yml` 양쪽에 복사 대상 추가. 한쪽만 넣으면 두 배포본이 갈린다.
