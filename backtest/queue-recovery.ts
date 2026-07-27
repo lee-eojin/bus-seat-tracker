@@ -13,6 +13,7 @@ import {
   toSeoulBucket,
   type VehicleObservation,
 } from '../shared/profile.js';
+import { boardingVerdict, expectedDemandAt, nextFullDepartureStreak, queueStatement, verdictSeatMargin, type BoardingVerdict } from '../shared/boarding.js';
 import { loadRouteCaches, loadSnapshots } from './data-source.js';
 
 // 좌석 관측만으로 정류장 대기 인원을 복원한다 (docs/queue-recovery.md).
@@ -37,6 +38,8 @@ interface Options {
   upstreamFrom: number;
   correct: boolean;
   includeWeekend: boolean;
+  allStops: boolean;
+  verdict: boolean;
   jsonPath: string | null;
 }
 
@@ -50,6 +53,8 @@ function readArguments(argumentsList: string[]): Options {
     upstreamFrom: 18,
     correct: true,
     includeWeekend: false,
+    allStops: false,
+    verdict: false,
     jsonPath: null,
   };
   for (const argument of argumentsList) {
@@ -62,6 +67,8 @@ function readArguments(argumentsList: string[]): Options {
     if (name === '--upstream-from' && value) options.upstreamFrom = Number(value);
     if (name === '--no-correct') options.correct = false;
     if (name === '--include-weekend') options.includeWeekend = true;
+    if (name === '--all-stops') options.allStops = true;
+    if (name === '--verdict') options.verdict = true;
     if (name === '--json' && value) options.jsonPath = path.resolve(value);
   }
   return options;
@@ -88,12 +95,20 @@ interface Pass {
   at: number;
   readSequence: number;
   readAtStop: boolean;
+  direct: boolean;
   observedSeats: number;
   arrivalSeats: number;
   departureSeats: number;
   rawBoarding: number;
   boarding: number;
   cleared: boolean;
+}
+
+interface DayPasses {
+  passes: Pass[];
+  direct: number;
+  viaPassThrough: number;
+  skipped: number;
 }
 
 interface Interval {
@@ -128,25 +143,56 @@ function passesForDay(
   options: Options,
   passThrough: number[],
   profile: ReturnType<typeof buildDeconvolvedProfileRoute> | null,
-): Pass[] {
+): DayPasses {
   const passes: Pass[] = [];
+  let direct = 0;
+  let viaPassThrough = 0;
+  let skipped = 0;
+
   for (const run of runs) {
     const inWindow = run.filter((point) => seoulHour(point.time) >= options.fromHour && seoulHour(point.time) < options.toHour);
+    const atStop = inWindow.filter((point) => point.sequence === options.stopSequence);
+
+    // 조밀 관측이 있으면 같은 정류장에서 도착·출발을 직접 읽는다. 경유지 트릭은 10분
+    // 샘플링의 우회책이었고 1분 간격에서는 필요 없다. 정차 중 갱신이 섞이는 문제도
+    // 여기서는 사라진다 — 첫 관측이 도착, 마지막 관측이 출발이다.
+    if (atStop.length >= 2) {
+      const first = atStop[0]!;
+      const last = atStop[atStop.length - 1]!;
+      direct += 1;
+      passes.push({
+        at: first.time,
+        readSequence: options.stopSequence,
+        readAtStop: true,
+        direct: true,
+        observedSeats: first.seats,
+        arrivalSeats: first.seats,
+        departureSeats: last.seats,
+        rawBoarding: first.seats - last.seats,
+        boarding: Math.max(0, first.seats - last.seats),
+        cleared: last.seats > 0,
+      });
+      continue;
+    }
+
+    // 관측이 한 번뿐이면 도착인지 출발인지 가릴 수 없어 하류 경유지로 판정한다.
     const after = inWindow.find((point) => passThrough.includes(point.sequence));
-    if (!after) continue;
-    const atStop = inWindow.find((point) => point.sequence === options.stopSequence);
-    const upstream = inWindow.filter((point) => point.sequence >= options.upstreamFrom && point.sequence < options.stopSequence).pop();
-    const source = atStop ?? upstream;
-    if (!source) continue;
+    const source = atStop[0] ?? inWindow.filter((point) => point.sequence >= options.upstreamFrom && point.sequence < options.stopSequence).pop();
+    if (!after || !source) {
+      if (inWindow.some((point) => point.sequence >= options.stopSequence)) skipped += 1;
+      continue;
+    }
 
     const readAtStop = source.sequence === options.stopSequence;
     const arrivalSeats = readAtStop || !profile
       ? source.seats
       : propagateToStop(profile, source.sequence, options.stopSequence, source.seats, source.bucket);
+    viaPassThrough += 1;
     passes.push({
       at: source.time,
       readSequence: source.sequence,
       readAtStop,
+      direct: false,
       observedSeats: source.seats,
       arrivalSeats,
       departureSeats: after.seats,
@@ -155,7 +201,7 @@ function passesForDay(
       cleared: after.seats > 0,
     });
   }
-  return passes.sort((left, right) => left.at - right.at);
+  return { passes: passes.sort((left, right) => left.at - right.at), direct, viaPassThrough, skipped };
 }
 
 // 큐 해소 → 다음 큐 해소 구간마다 λ를 낸다. 같은 시각에 여러 대가 해소하면
@@ -217,10 +263,9 @@ async function main(): Promise<void> {
   console.log(`대기 인원 복원 · ${options.routeName} seq${options.stopSequence} ${stopName}`);
   console.log('═'.repeat(78));
   if (passThrough.length === 0) {
-    console.log('이 정류장 뒤에 경유지가 없어 출발 잔여석을 깨끗하게 읽을 수 없습니다.');
-    console.log('연속 시퀀스 관측이 필요하며, 현재 수집 해상도에서는 거의 잡히지 않습니다.\n');
+    console.log('하류 경유지 없음 — 조밀 관측(같은 정류장 2회 이상)으로만 도착·출발을 읽는다.');
   } else {
-    console.log(`출발 잔여석 판정 정류장(경유지): ${passThrough.join(', ')}`);
+    console.log(`하류 경유지: ${passThrough.join(', ')} (조밀 관측이 없을 때만 사용)`);
   }
   console.log(`관측 창 ${options.fromHour}~${options.toHour}시 · 상류 대체 허용 seq${options.upstreamFrom} 이상 · 상류 오염 보정 ${options.correct ? '켬' : '끔'}`);
 
@@ -232,6 +277,59 @@ async function main(): Promise<void> {
       return day !== 0 && day !== 6;
     });
 
+  // 정류장 전체를 훑을 때 날짜마다 다시 만들지 않도록 운행 분할을 미리 캐싱한다.
+  const runsByDate = new Map<string, VehicleObservation[][]>();
+  for (const date of dates) {
+    const runs: VehicleObservation[][] = [];
+    for (const observations of observationsByVehicle(snapshots, (day) => day === date).values()) {
+      runs.push(...splitRuns(observations));
+    }
+    runsByDate.set(date, runs);
+  }
+
+  if (options.allStops) {
+    console.log('\n' + '═'.repeat(78));
+    console.log('정류장별 도착률 λ 프로파일 (2단계)');
+    console.log('═'.repeat(78));
+    console.log('  seq  정류장                        구간  총승차   총분   λ(시간가중)  직독/경유지/불가');
+    const rows: Array<{ sequence: number; name: string; intervals: number; boarding: number; minutes: number; lambda: number; direct: number; via: number; skipped: number }> = [];
+    for (const stop of cache.stops) {
+      if ((stop.name ?? '').includes('경유')) continue;
+      const stopOptions = { ...options, stopSequence: stop.sequence };
+      const through = passThroughAfter(cache, stop.sequence);
+      let boarding = 0;
+      let minutes = 0;
+      let count = 0;
+      let direct = 0;
+      let via = 0;
+      let skipped = 0;
+      for (const date of dates) {
+        const day = passesForDay(runsByDate.get(date)!, stopOptions, through, null);
+        direct += day.direct;
+        via += day.viaPassThrough;
+        skipped += day.skipped;
+        for (const interval of intervalsOf(day.passes)) {
+          boarding += interval.boarding;
+          minutes += interval.minutes;
+          count += 1;
+        }
+      }
+      if (count === 0) continue;
+      rows.push({ sequence: stop.sequence, name: stop.name ?? '?', intervals: count, boarding, minutes, lambda: minutes > 0 ? boarding / minutes : 0, direct, via, skipped });
+    }
+    for (const row of rows.sort((left, right) => right.lambda - left.lambda)) {
+      console.log(
+        `  ${String(row.sequence).padStart(3)}  ${row.name.slice(0, 26).padEnd(28)}${String(row.intervals).padStart(4)}${row.boarding.toFixed(0).padStart(8)}${row.minutes.toFixed(0).padStart(7)}${row.lambda.toFixed(2).padStart(12)}   ${row.direct}/${row.via}/${row.skipped}`,
+      );
+    }
+    console.log(`\n  정류장 ${rows.length}곳에서 λ 산출 · 전체 ${cache.stops.length}곳`);
+    if (options.jsonPath) {
+      await writeFile(options.jsonPath, `${JSON.stringify({ generatedAt: new Date().toISOString(), route: options.routeName, dates, window: { fromHour: options.fromHour, toHour: options.toHour }, stops: rows }, null, 2)}\n`);
+      console.log(`\n결과 저장: ${options.jsonPath}`);
+    }
+    return;
+  }
+
   const allIntervals: Array<Interval & { date: string }> = [];
   const allPasses: Array<Pass & { date: string }> = [];
 
@@ -240,17 +338,17 @@ async function main(): Promise<void> {
     const profile = options.correct
       ? buildDeconvolvedProfileRoute(snapshots, (day) => dates.includes(day) && day !== date, 'arrival')
       : null;
-    const runs: VehicleObservation[][] = [];
-    for (const observations of observationsByVehicle(snapshots, (day) => day === date).values()) {
-      runs.push(...splitRuns(observations));
-    }
-    const passes = passesForDay(runs, options, passThrough, profile);
+    const day = passesForDay(runsByDate.get(date)!, options, passThrough, profile);
+    const passes = day.passes;
     const intervals = intervalsOf(passes);
     allPasses.push(...passes.map((item) => ({ ...item, date })));
     allIntervals.push(...intervals.map((item) => ({ ...item, date })));
 
     const clears = passes.filter((item) => item.cleared).length;
-    console.log(`\n[${date}] 통과 ${passes.length}대 · 큐해소 ${clears}건 · 산출 구간 ${intervals.length}개`);
+    console.log(
+      `\n[${date}] 통과 ${passes.length}대 (조밀 직독 ${day.direct} · 경유지 ${day.viaPassThrough} · 판정불가 ${day.skipped}) ` +
+      `· 큐해소 ${clears}건 · 산출 구간 ${intervals.length}개`,
+    );
     for (const interval of intervals) {
       console.log(
         `   ${seoulClock(interval.from)}~${seoulClock(interval.to)}  ${String(Math.round(interval.minutes)).padStart(4)}분 ` +
@@ -263,6 +361,56 @@ async function main(): Promise<void> {
   const overall = describe(lambdas);
   const longRuns = allIntervals.filter((interval) => interval.minutes >= 40);
   const longStats = describe(longRuns.map((interval) => interval.lambda));
+
+  console.log('\n' + '═'.repeat(78));
+  console.log('버스 통과 시점의 대기 인원 (λ 없이, 가정 없이)');
+  console.log('═'.repeat(78));
+  console.log('  날짜   시각   도착석 → 출발석   대기 인원');
+  for (const pass of allPasses) {
+    const statement = queueStatement(pass);
+    const mark = statement.exact ? '=' : '≥';
+    const note = statement.exact ? '정확 (좌석 남기고 출발)' : '하한 (만차 출발 — 못 탄 사람은 흔적 없음)';
+    console.log(
+      `  ${pass.date.slice(5)} ${seoulClock(pass.at)}  ${pass.arrivalSeats.toFixed(0).padStart(4)}석 → ${String(pass.departureSeats).padStart(3)}석   ` +
+      `${mark} ${statement.people.toFixed(0).padStart(3)}명  ${note}`,
+    );
+  }
+
+  if (options.verdict) {
+    const label: Record<BoardingVerdict, string> = { roomy: '여유', tight: '빠듯', unlikely: '어려움' };
+    const matrix = new Map<BoardingVerdict, { cleared: number; full: number }>([
+      ['roomy', { cleared: 0, full: 0 }],
+      ['tight', { cleared: 0, full: 0 }],
+      ['unlikely', { cleared: 0, full: 0 }],
+    ]);
+
+    console.log('\n' + '═'.repeat(78));
+    console.log(`탑승 가능성 판정 · 여유폭 ${verdictSeatMargin}석 (docs/queue-recovery.md §10)`);
+    console.log('═'.repeat(78));
+    console.log('  날짜   시각    좌석   기대수요  만석연속   판정     실제');
+    for (const date of dates) {
+      // 판정 대상일은 프로파일 학습에서 뺀다.
+      const profile = buildDeconvolvedProfileRoute(snapshots, (day) => dates.includes(day) && day !== date, 'arrival');
+      let streak = 0;
+      for (const pass of allPasses.filter((item) => item.date === date)) {
+        const shifted = new Date(pass.at + 9 * 3600 * 1000);
+        const bucket = shifted.getUTCHours() * 2 + (shifted.getUTCMinutes() >= 30 ? 1 : 0);
+        const demand = expectedDemandAt((at) => netDemandAt(profile, options.stopSequence, at, false).mean, bucket);
+        const verdict = boardingVerdict({ arrivalSeats: pass.arrivalSeats, expectedDemand: demand, fullDepartureStreak: streak });
+        matrix.get(verdict)![pass.cleared ? 'cleared' : 'full'] += 1;
+        console.log(
+          `  ${date.slice(5)} ${seoulClock(pass.at)}  ${pass.arrivalSeats.toFixed(0).padStart(4)}석  ${demand.toFixed(1).padStart(7)}  ${String(streak).padStart(7)}   ${label[verdict].padEnd(7)} ${pass.cleared ? '전원 탑승' : '만차'}`,
+        );
+        streak = nextFullDepartureStreak(streak, pass);
+      }
+    }
+
+    console.log('\n  판정     전원 탑승   만차(못 탄 사람 가능)');
+    for (const [verdict, counts] of matrix) {
+      console.log(`  ${label[verdict].padEnd(7)} ${String(counts.cleared).padStart(8)}   ${String(counts.full).padStart(14)}`);
+    }
+    return;
+  }
 
   console.log('\n' + '═'.repeat(78));
   console.log('λ 분포');

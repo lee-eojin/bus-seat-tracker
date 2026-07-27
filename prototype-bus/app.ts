@@ -1,3 +1,4 @@
+import { boardingVerdict, expectedDemandAt, type BoardingVerdict } from '../shared/boarding.js';
 import { asList, isRecord, readHistoryPayload, readIdentifier, readLatestPayload, readNumber, readProfilePayload, type Direction, type DisplayStop, type DisplayVehicle, type HistoryBucket, type LatestPayload, type LatestRoute, type ProfileCell, type SeatState } from '../shared/model.js';
 
 declare global {
@@ -667,6 +668,10 @@ interface SeatForecast {
   arrivalMean: number;
   boardableProbability: number;
   lowConfidence: boolean;
+  verdict: BoardingVerdict;
+  // 만석 연속을 실제로 관측했는지. 조밀 수집 구간 밖에서는 알 수 없고, 그때 판정은
+  // 좌석 대비만으로 내려지므로 화면에 그 사실을 드러내야 한다 (shared/boarding.ts).
+  streakKnown: boolean;
 }
 
 interface NetDemandEstimate {
@@ -776,16 +781,27 @@ function forecastVehicle(route: LatestRoute, vehicle: DisplayVehicle, stops: Dis
     distribution = applyNetDemand(distribution, estimate);
     let boardableProbability = 0;
     for (let seats = 1; seats <= seatCapacity; seats += 1) boardableProbability += distribution[seats] ?? 0;
-    forecasts.set(stop.sequence, { arrivalMean, boardableProbability, lowConfidence });
+    const verdict = boardingVerdict({
+      arrivalSeats: arrivalMean,
+      expectedDemand: expectedDemandAt((at) => netDemandAt(route.route.name, stop.sequence, at, timeBucket.weekend).mean, timeBucket.bucket),
+      // 조밀 관측이 없으면 항목 자체가 없다. 그때는 만석 연속을 0으로 두고 좌석 대비만 본다
+      // — "연속 0"이라고 단정하는 게 아니라 모르는 값을 판정에서 뺀다는 뜻이다.
+      fullDepartureStreak: route.fullDepartureStreaks[String(stop.sequence)] ?? 0,
+    });
+    const streakKnown = route.fullDepartureStreaks[String(stop.sequence)] !== undefined;
+    forecasts.set(stop.sequence, { arrivalMean, boardableProbability, lowConfidence, verdict, streakKnown });
   }
   return forecasts;
 }
 
 function forecastTint(forecast: SeatForecast): string {
-  if (forecast.boardableProbability >= 0.7) return 'ok';
-  if (forecast.boardableProbability >= 0.3) return 'warn';
+  if (forecast.verdict === 'roomy') return 'ok';
+  if (forecast.verdict === 'tight') return 'warn';
   return 'bad';
 }
+
+const verdictLabels: Record<BoardingVerdict, string> = { roomy: '여유', tight: '빠듯', unlikely: '어려움' };
+
 
 function nextVehicleFor(stopSequence: number, vehicles: DisplayVehicle[]): DisplayVehicle | null {
   return vehicles
@@ -841,10 +857,27 @@ function renderAxis(route: LatestRoute): void {
     row.append(dot, name);
 
     if (forecast) {
-      const forecastChip = document.createElement('span');
-      forecastChip.className = 'stop-prob';
-      forecastChip.textContent = `예상 ${Math.round(forecast.arrivalMean)}석${forecast.lowConfidence ? '*' : ''}`;
-      row.append(forecastChip);
+      // 판정이 주역, 좌석은 근거. 직전 버스 상태를 관측 못 했으면 배지를 점선으로 낮춘다
+      // (design/board-mockup.html).
+      const verdict = document.createElement('div');
+      verdict.className = 'verdict';
+
+      const badge = document.createElement('span');
+      badge.className = `badge ${forecastTint(forecast)}${forecast.streakKnown ? '' : ' unverified'}`;
+      badge.textContent = verdictLabels[forecast.verdict];
+
+      const seats = document.createElement('span');
+      seats.className = 'seats';
+      seats.textContent = `${Math.round(forecast.arrivalMean)}석 예상`;
+      if (forecast.lowConfidence) {
+        const sampleNote = document.createElement('span');
+        sampleNote.className = 'thin';
+        sampleNote.textContent = ' · 표본 적음';
+        seats.append(sampleNote);
+      }
+
+      verdict.append(badge, seats);
+      row.append(verdict);
     } else {
       const probabilityCell = historyCell(route.route.name, stop.sequence);
       if (probabilityCell && probabilityCell.samples >= recommendationMinSamples) {
