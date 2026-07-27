@@ -31,15 +31,18 @@ open prototype-bus/index.html
 
 `npm run typecheck`은 산출물 없이 타입만 검사하고, `npm run build`는 `dist/`에 JavaScript를 만든다.
 
-## 실시간 좌석 오버레이 (선택)
+## 실시간 좌석 오버레이
 
-`prototype-bus/data/config.js`에 GBIS 인증키를 넣으면 화면이 60초마다 잔여석을 직접 조회해 스냅샷 위에 덮어쓴다. `prototype-bus/data/`는 gitignore 대상이라 키가 저장소에 올라가지 않는다.
+실시간 잔여석은 서버 프록시 `GET /api/live?route=3330`을 거친다. GBIS 인증키는 서버 환경변수 `GYEONGGI_BUS_API_KEY`에만 있고 브라우저로 내려가지 않는다. 응답에서 차량번호는 제거되며, 캐시는 `s-maxage=120`으로 노선당 2분에 1회만 origin을 친다 — 일 호출 한도 안에 들어가는 상한이다.
 
-```js
-window.__CONFIG__ = { gbisApiKey: '공공데이터포털에서 발급한 인증키' };
+```
+GET /api/live?route=3330
+→ { "routeName": "3330", "routeId": "204000057", "apiQueryTime": "20260727083000",
+    "vehicles": [{ "id": "...", "currentStopSequence": 12, "remainingSeats": 7,
+                   "crowded": 1, "status": 0 }] }
 ```
 
-키가 없으면 수집 스냅샷 표시로 동작한다. 라이브 응답의 차량번호는 표시하지도 저장하지도 않는다. 공개 배포 시에는 이 방식을 쓰면 키가 노출되므로, 그때는 프록시나 발행 주기 강화로 대체해야 한다.
+조회할 수 있는 노선은 `server/gbis.ts`의 화이트리스트에 있는 것뿐이며, 그 밖의 값은 400이다. 프록시가 실패하면 화면은 수집 스냅샷 표시로 되돌아간다.
 
 ## 자동 수집 재가동
 
@@ -53,7 +56,7 @@ Secrets가 준비되면 Actions의 **Collect bus seats**를 한 번 수동 실�
 
 ## 브랜치
 
-- `main`: 검증된 기준선
-- `dev`: TypeScript 전환과 기능 개발
+- `main`: 검증된 기준선. 수집 워크플로 스케줄은 여기서만 작동한다
+- `feature/*`: 작업 브랜치. `main`에서 갈라져 PR로 되돌아온다
 
-`dev`에서 검증한 뒤에만 `main` 반영 여부를 결정한다.
+`main`에서 검증한 뒤에만 반영 여부를 결정한다. TypeScript 전환기에 쓰던 `dev`는 역할이 끝나 정리했다 — PR base는 항상 `main`으로 잡는다.

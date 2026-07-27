@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc",
@@ -10,7 +13,8 @@
     "build:data": "npm run build && node dist/prototype-bus/build-data.js",
     "backtest": "npm run build && node dist/backtest/backtest.js",
     "score": "npm run build && node dist/backtest/score-predictions.js",
-    "queue": "npm run build && node dist/backtest/queue-recovery.js"
+    "queue": "npm run build && node dist/backtest/queue-recovery.js",
+    "build:site": "node scripts/build-site.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
