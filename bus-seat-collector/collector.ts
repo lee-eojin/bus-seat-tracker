@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto';
 import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { asList, isRecord, readIdentifier, readNumber, readRouteCache, type Route, type RouteCache, type RouteStop, type Snapshot, type VehicleSnapshot } from '../shared/model.js';
+import { asList, isNonBoardingStop, isRecord, readIdentifier, readNumber, readRouteCache, type Route, type RouteCache, type RouteStop, type Snapshot, type VehicleSnapshot } from '../shared/model.js';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(currentDirectory, '..', '..');
@@ -238,6 +238,25 @@ function describeError(error: unknown): string {
 // 노선 정보를 갱신하지 못하는 것과 좌석을 관측하지 못하는 것은 다른 사건이다.
 // busrouteservice가 한도 소진이나 장애로 막혀도, 노선 ID와 정류장 순서는 거의 변하지 않으므로
 // 만료된 캐시로 좌석 수집을 계속하는 편이 그날 표본을 통째로 버리는 것보다 낫다.
+// 승차 불가 지점은 이름 끝 표기로만 구분되고, 그 표기가 실제로 바뀐 적이 있다
+// (2026-07 중 `(경유)` → `(미정차)`). 판정자가 못 알아보면 화면이 못 타는 지점에
+// 판정을 띄우고 분석 도구의 출발 좌석 판정이 조용히 죽는다. 에러가 나지 않아
+// 알아채기 어려우므로, 있던 것이 사라지는 순간을 잡는다.
+function warnIfNonBoardingMarkersVanished(routeName: string, previous: RouteCache | undefined, stops: RouteStop[]): void {
+  const before = previous?.stops.filter((stop) => isNonBoardingStop(stop.name)).length ?? 0;
+  const after = stops.filter((stop) => isNonBoardingStop(stop.name)).length;
+  if (before > 0 && after === 0) {
+    console.warn(
+      `${routeName}번의 승차 불가 지점이 ${before}곳에서 0곳이 됐습니다. ` +
+      `표기가 바뀌었을 수 있습니다 — shared/model.ts의 nonBoardingMarkers를 확인하세요.`,
+    );
+    return;
+  }
+  if (after === 0) {
+    console.warn(`${routeName}번에서 승차 불가 지점을 찾지 못했습니다. 표기를 확인하세요.`);
+  }
+}
+
 async function resolveRoutes(routeNames: string[], apiKey: string, refreshRoutes: boolean): Promise<Route[]> {
   // --refresh-routes는 캐시를 건너뛰라는 뜻이지 버리라는 뜻이 아니다. 갱신에 실패하면
   // 가진 캐시로 돌아갈 수 있어야 강제 갱신이 수집을 멈추는 발판이 되지 않는다.
@@ -254,7 +273,9 @@ async function resolveRoutes(routeNames: string[], apiKey: string, refreshRoutes
 
     try {
       const route = await findRoute(routeName, apiKey);
-      await cacheRouteStops(route, await fetchRouteStops(route, apiKey));
+      const stops = await fetchRouteStops(route, apiKey);
+      warnIfNonBoardingMarkersVanished(routeName, cache, stops);
+      await cacheRouteStops(route, stops);
       return route;
     } catch (error: unknown) {
       if (cache) {

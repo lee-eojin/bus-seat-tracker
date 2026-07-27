@@ -2,6 +2,18 @@ export type Direction = 'up' | 'down';
 
 export type SeatState = 'ok' | 'warn' | 'bad' | 'unknown';
 
+// 승차할 수 없는 정류장. GBIS는 고속도로 진출입로·톨게이트처럼 노선이 지나가기만 하는
+// 지점을 정류장 목록에 함께 내려주고, 이름 끝의 표기로만 구분한다.
+//
+// 표기가 바뀐 적이 있다. 2026-07 중 `(경유)` → `(미정차)`로 관측됐고, 한쪽만 보던 코드가
+// 조용히 아무것도 못 걸러 냈다. 새 표기가 또 생기면 여기만 고친다.
+const nonBoardingMarkers = ['미정차', '경유'] as const;
+
+export function isNonBoardingStop(name: string | null): boolean {
+  if (!name) return false;
+  return nonBoardingMarkers.some((marker) => name.includes(`(${marker})`));
+}
+
 export interface Route {
   id: string;
   name: string;
