@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>정류장 판정 화면 시안 — 현재 vs 제안</title>
+<style>
+/* 기존 index.html의 토큰을 그대로 쓴다. 시안이 이식 가능해야 하므로 새 색을 만들지 않는다. */
+:root{
+  --ok:#237b55;--ok-soft:rgba(35,123,85,.12);
+  --warn:#a85a00;--warn-soft:rgba(168,90,0,.12);
+  --bad:#c62c40;--bad-soft:rgba(198,44,64,.10);
+  --unknown:#6b7280;--unknown-soft:rgba(107,114,128,.12);
+  --ink:#1c2330;--sub:#5b6472;--line:#e3e7ec;--panel:#f6f8fa;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:#eef1f4;color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+.page{max-width:860px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:19px;margin:0 0 4px}
+.lede{margin:0 0 20px;color:var(--sub);font-size:13.5px;line-height:1.6}
+.compare{display:grid;grid-template-columns:1fr;gap:20px}
+@media (min-width:760px){.compare{grid-template-columns:1fr 1fr}}
+.pane{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px}
+.pane > h2{font-size:13px;margin:0 0 3px;letter-spacing:.02em}
+.pane > .note{margin:0 0 12px;color:var(--sub);font-size:12px;line-height:1.5}
+.pane.now > h2{color:var(--sub)}
+.pane.next > h2{color:var(--bad)}
+
+/* ── 공통: 노선 축 ── */
+.axis{border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.stop-row{display:flex;align-items:center;gap:12px;min-height:46px;padding:5px 14px;position:relative}
+.stop-row + .stop-row{border-top:1px solid #eef1f4}
+.stop-dot{width:10px;height:10px;flex:none;border-radius:50%;border:2px solid #aab3bf;background:#fff}
+.stop-row.terminal .stop-dot{border-color:var(--ink);background:var(--ink)}
+.stop-name{flex:1;min-width:0;font-size:14px;font-weight:600;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stop-name small{display:block;color:var(--sub);font-size:12px;font-weight:500}
+
+/* ── 현재 화면 ── */
+.now .stop-row.tint-ok{background:var(--ok-soft)}
+.now .stop-row.tint-warn{background:var(--warn-soft)}
+.now .stop-row.tint-bad{background:var(--bad-soft)}
+.now .stop-row.tint-unknown{background:var(--unknown-soft)}
+.now .stop-prob{flex:none;font-size:12.5px;font-weight:700;color:var(--sub)}
+
+/* ── 제안: 판정을 배지로 승격, 좌석은 근거로 내림 ── */
+.next .stop-row.tint-ok{background:rgba(35,123,85,.05)}
+.next .stop-row.tint-warn{background:rgba(168,90,0,.06)}
+.next .stop-row.tint-bad{background:rgba(198,44,64,.055)}
+.next .stop-row.tint-unknown{background:transparent}
+.verdict{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+.badge{display:inline-flex;align-items:center;gap:4px;
+  min-width:62px;justify-content:center;
+  padding:4px 10px;border-radius:999px;
+  font-size:12.5px;font-weight:800;letter-spacing:-.01em;
+  border:1px solid transparent}
+.badge.ok{background:var(--ok);color:#fff}
+.badge.warn{background:var(--warn);color:#fff}
+.badge.bad{background:var(--bad);color:#fff}
+.badge.unknown{background:#fff;color:var(--unknown);border-color:var(--line)}
+/* 만석 연속을 관측하지 못한 경우 — 기호(?) 대신 점선 테두리로 "근거가 얇다"를 말한다 */
+.badge.unverified{border-style:dashed;border-color:currentColor;
+  background:#fff;color:inherit}
+.badge.ok.unverified{color:var(--ok)}
+.badge.warn.unverified{color:var(--warn)}
+.badge.bad.unverified{color:var(--bad)}
+.seats{font-size:11.5px;color:var(--sub);white-space:nowrap;font-variant-numeric:tabular-nums}
+.seats .thin{opacity:.55}
+
+/* ── 범례 ── */
+.legend{margin-top:14px;padding:12px 14px;border:1px solid var(--line);
+  border-radius:12px;background:var(--panel);font-size:12.5px;line-height:1.75}
+.legend b{font-weight:800}
+.legend .row{display:flex;gap:8px;align-items:baseline}
+.legend .row + .row{margin-top:6px}
+.legend .badge{min-width:56px;font-size:11.5px;padding:3px 8px}
+.changes{margin-top:24px;background:#fff;border:1px solid var(--line);
+  border-radius:16px;padding:16px 18px}
+.changes h2{font-size:14px;margin:0 0 10px}
+.changes ol{margin:0;padding-left:20px;font-size:13.5px;line-height:1.85;color:var(--ink)}
+.changes li + li{margin-top:8px}
+.changes .why{color:var(--sub)}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>정류장 판정 화면 시안</h1>
+  <p class="lede">
+    2026-07-27 08:31 KST · 3330 판교 방면 실제 데이터.
+    오늘 판정 시스템이 들어가면서 정류장 줄의 정보가 “예상 N석” 하나에서 넷(판정·예상석·<code>?</code>·<code>*</code>)으로 늘었다.
+    배치를 다시 정한다.
+  </p>
+
+  <div class="compare">
+    <!-- ─────────── 현재 ─────────── -->
+    <section class="pane now">
+      <h2>현재</h2>
+      <p class="note">판정과 좌석이 한 칩에 붙어 있고, <code>?</code>·<code>*</code>가 같은 줄에 섞인다.</p>
+      <div class="axis">
+        <div class="stop-row tint-ok">
+          <i class="stop-dot"></i><div class="stop-name">성결대학교.안양아트센터.명학역</div>
+          <span class="stop-prob">여유 · 예상 38석</span>
+        </div>
+        <div class="stop-row tint-ok">
+          <i class="stop-dot"></i><div class="stop-name">안양우편물류센터</div>
+          <span class="stop-prob">여유 · 예상 31석</span>
+        </div>
+        <div class="stop-row tint-bad">
+          <i class="stop-dot"></i><div class="stop-name">롯데백화점.범계역</div>
+          <span class="stop-prob">어려움 · 예상 13석</span>
+        </div>
+        <div class="stop-row tint-warn">
+          <i class="stop-dot"></i><div class="stop-name">문화의거리</div>
+          <span class="stop-prob">빠듯 · 예상 9석*</span>
+        </div>
+        <div class="stop-row tint-ok">
+          <i class="stop-dot"></i><div class="stop-name">안양시청</div>
+          <span class="stop-prob">여유? · 예상 28석</span>
+        </div>
+        <div class="stop-row tint-ok">
+          <i class="stop-dot"></i><div class="stop-name">귀인중학교</div>
+          <span class="stop-prob">여유? · 예상 33석</span>
+        </div>
+        <div class="stop-row tint-unknown">
+          <i class="stop-dot"></i><div class="stop-name">학의JC<small>경유 · 정차 없음</small></div>
+        </div>
+        <div class="stop-row terminal tint-ok">
+          <i class="stop-dot"></i><div class="stop-name">판교역.낙생육교.현대백화점</div>
+          <span class="stop-prob">여유? · 예상 41석</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────── 제안 ─────────── -->
+    <section class="pane next">
+      <h2>제안</h2>
+      <p class="note">판정을 배지로 올리고 좌석은 근거로 내린다. 점선 테두리 = 직전 버스 상태 미관측.</p>
+      <div class="axis">
+        <div class="stop-row tint-ok">
+          <i class="stop-dot"></i><div class="stop-name">성결대학교.안양아트센터.명학역</div>
+          <div class="verdict"><span class="badge ok">여유</span><span class="seats">38석 예상</span></div>
+        </div>
+        <div class="stop-row tint-ok">
+          <i class="stop-dot"></i><div class="stop-name">안양우편물류센터</div>
+          <div class="verdict"><span class="badge ok">여유</span><span class="seats">31석 예상</span></div>
+        </div>
+        <div class="stop-row tint-bad">
+          <i class="stop-dot"></i><div class="stop-name">롯데백화점.범계역</div>
+          <div class="verdict"><span class="badge bad">어려움</span><span class="seats">13석 예상</span></div>
+        </div>
+        <div class="stop-row tint-warn">
+          <i class="stop-dot"></i><div class="stop-name">문화의거리</div>
+          <div class="verdict"><span class="badge warn">빠듯</span><span class="seats">9석 예상 <span class="thin">· 표본 적음</span></span></div>
+        </div>
+        <div class="stop-row tint-ok">
+          <i class="stop-dot"></i><div class="stop-name">안양시청</div>
+          <div class="verdict"><span class="badge ok unverified">여유</span><span class="seats">28석 예상</span></div>
+        </div>
+        <div class="stop-row tint-ok">
+          <i class="stop-dot"></i><div class="stop-name">귀인중학교</div>
+          <div class="verdict"><span class="badge ok unverified">여유</span><span class="seats">33석 예상</span></div>
+        </div>
+        <div class="stop-row tint-unknown">
+          <i class="stop-dot"></i><div class="stop-name">학의JC<small>경유 · 정차 없음</small></div>
+        </div>
+        <div class="stop-row terminal tint-ok">
+          <i class="stop-dot"></i><div class="stop-name">판교역.낙생육교.현대백화점</div>
+          <div class="verdict"><span class="badge ok unverified">여유</span><span class="seats">41석 예상</span></div>
+        </div>
+      </div>
+
+      <div class="legend">
+        <div class="row"><span class="badge ok">여유</span><span>자리가 넉넉합니다.</span></div>
+        <div class="row"><span class="badge warn">빠듯</span><span><b>줄 앞쪽이면 타고 뒤쪽이면 못 탈 수 있습니다.</b></span></div>
+        <div class="row"><span class="badge bad">어려움</span><span>직전 버스들이 만석으로 지나갔습니다.</span></div>
+        <div class="row"><span class="badge ok unverified">점선</span><span>직전 버스 상태를 관측하지 못해 좌석만으로 판정했습니다.</span></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="changes">
+    <h2>바꾼 것과 이유</h2>
+    <ol>
+      <li><b>판정을 배지로 승격.</b>
+        <span class="why">이용자가 알고 싶은 건 “탈 수 있나”지 “몇 석인가”가 아니다. 판정이 주역이 되어야 훑어볼 때 바로 읽힌다.</span></li>
+      <li><b>좌석 수를 배지 아래 보조 텍스트로.</b>
+        <span class="why">판정의 근거이지 결론이 아니다. 두 값이 같은 크기로 나란히 있으면 무엇을 봐야 할지 알 수 없다.</span></li>
+      <li><b><code>?</code> 기호를 점선 테두리로.</b>
+        <span class="why">문자 기호는 훑을 때 놓치고, 판정 텍스트에 붙으면 “여유?”가 한 단어처럼 읽힌다. 테두리는 색을 유지한 채 확신 정도만 낮춘다.</span></li>
+      <li><b>행 배경 틴트를 절반 이하로.</b>
+        <span class="why">배지가 색을 맡으므로 배경까지 진하면 서로 경쟁한다. 틴트는 “스캔용 약한 신호”로만 남긴다.</span></li>
+      <li><b><code>*</code>(표본 부족)를 말로 풀었다.</b>
+        <span class="why">별표는 각주 관례라 모바일에서 아무도 찾아보지 않는다.</span></li>
+      <li><b>범례를 화면 안에 뒀다.</b>
+        <span class="why">여유·빠듯·어려움은 오늘 새로 생긴 말이다. 푸터 설명만으로는 첫 방문자가 못 읽는다.</span></li>
+    </ol>
+  </div>
+</div>
+</body>
+</html>

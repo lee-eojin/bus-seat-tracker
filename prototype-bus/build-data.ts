@@ -2,7 +2,8 @@ import { appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promise
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readRouteCache, readSnapshot, type DailyBuckets, type Direction, type HistoryRoute, type LatestPayload, type LatestRoute, type ProfileRoute, type RouteCache, type Snapshot, type VehicleSnapshot } from '../shared/model.js';
-import { applyNetDemand, buildDeconvolvedProfileRoute, buildHistoryRoute, distributionMean, netDemandAt, pointDistribution } from '../shared/profile.js';
+import { applyNetDemand, buildDeconvolvedProfileRoute, buildHistoryRoute, distributionMean, netDemandAt, observationsByVehicle, pointDistribution, splitRuns } from '../shared/profile.js';
+import { fullDepartureStreaks } from '../shared/boarding.js';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(currentDirectory, '..', '..');
@@ -21,6 +22,8 @@ interface BuildOptions {
 const minutesPerStop = 2;
 // 기록할 지평(정류장 수). 백테스트의 horizon 구간(1-2 / 3-5 / 6+)에 하나씩 대응시킨다.
 const loggedHorizons = [1, 3, 6];
+// 만석 연속 수를 세는 최근 창. 조밀 수집 구간(60초) 안에서만 의미 있는 값이 나온다.
+const streakWindowMinutes = 90;
 
 interface Observation {
   sequence: number;
@@ -142,6 +145,7 @@ function buildLatestRoute(cache: RouteCache, snapshot: Snapshot | null): LatestR
     route: cache.route,
     collectedAt: snapshot?.collectedAt ?? null,
     turnSequence,
+    fullDepartureStreaks: {},
     stops: cache.stops.map((stop) => ({
       sequence: stop.sequence,
       name: stop.name,
@@ -316,9 +320,16 @@ async function buildOnce(dataDirectory: string, targetDate: string, predictionLo
   for (const cache of caches) {
     const snapshotFiles = await listSnapshotFiles(dataDirectory, cache.route.name);
     const latestSnapshot = await findLatestSnapshot(snapshotFiles);
-    latestRoutes.push(buildLatestRoute(cache, latestSnapshot));
     dailyDays[cache.route.name] = { [targetDate]: { bySeqHour: await buildDailyRoute(snapshotFiles, targetDate) } };
     const snapshots = await loadSnapshots(snapshotFiles);
+
+    // 만석 연속 수는 최근 창의 조밀 관측에서만 나온다. 관측이 없는 정류장은 항목이 비고,
+    // 화면은 그것을 "연속 0"이 아니라 "모름"으로 다뤄야 한다 (shared/boarding.ts).
+    const runs = [...observationsByVehicle(snapshots).values()].flatMap((observations) => splitRuns(observations));
+    latestRoutes.push({
+      ...buildLatestRoute(cache, latestSnapshot),
+      fullDepartureStreaks: fullDepartureStreaks(runs, Date.parse(generatedAt) - streakWindowMinutes * 60_000, Date.parse(generatedAt)),
+    });
     historyRoutes[cache.route.name] = buildHistoryRoute(snapshots);
     // 구간합 역산 + 도착 귀속. 균등 배분(1/n)이 정류장 스파이크를 뭉개고 핫스팟을 한 칸
     // 하류로 밀던 문제를 제거한 조합이다 (검증 보고서 §5~§7, §9-1).

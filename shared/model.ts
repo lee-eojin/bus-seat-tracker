@@ -66,6 +66,9 @@ export interface LatestRoute {
   turnSequence: number | null;
   stops: DisplayStop[];
   vehicles: DisplayVehicle[];
+  // 정류장 시퀀스 → 마지막 큐 해소 이후 만석으로 떠난 버스 수 (shared/boarding.ts).
+  // 조밀 관측이 없는 정류장은 도착·출발을 가릴 수 없어 항목 자체가 없다 — 0과 다르다.
+  fullDepartureStreaks: Record<string, number>;
 }
 
 export interface LatestPayload {
@@ -248,6 +251,16 @@ function readDisplayVehicle(value: unknown): DisplayVehicle | null {
   };
 }
 
+function readStreaks(value: unknown): Record<string, number> {
+  if (!isRecord(value)) return {};
+  const streaks: Record<string, number> = {};
+  for (const [sequenceKey, streak] of Object.entries(value)) {
+    const count = readNumber(streak);
+    if (count !== null && count >= 0) streaks[sequenceKey] = count;
+  }
+  return streaks;
+}
+
 function readLatestRoute(value: unknown): LatestRoute | null {
   if (!isRecord(value)) return null;
   const route = readRoute(value.route);
@@ -259,6 +272,7 @@ function readLatestRoute(value: unknown): LatestRoute | null {
     turnSequence: readNumber(value.turnSequence),
     stops: asList(value.stops).map(readDisplayStop).filter((stop): stop is DisplayStop => stop !== null),
     vehicles: asList(value.vehicles).map(readDisplayVehicle).filter((vehicle): vehicle is DisplayVehicle => vehicle !== null),
+    fullDepartureStreaks: readStreaks(value.fullDepartureStreaks),
   };
 }
 
