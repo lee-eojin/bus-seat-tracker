@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>이용 안내 · 빨간버스 좌석 현황</title>
+<style>
+:root{--ink:#1c2330;--sub:#5b6472;--line:#e3e7ec;--panel:#f6f8fa;--bad:#c62c40}
+*{box-sizing:border-box}
+html,body{margin:0;background:#eef1f4;color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  font-size:15px;line-height:1.75}
+.page{max-width:640px;margin:0 auto;padding:22px 18px 56px}
+a{color:var(--bad)}
+h1{font-size:20px;margin:0 0 6px}
+h2{font-size:15px;margin:28px 0 8px;padding-top:18px;border-top:1px solid var(--line)}
+h2:first-of-type{border-top:0;padding-top:0}
+p{margin:0 0 12px}
+ul{margin:0 0 12px;padding-left:20px}
+li{margin-bottom:6px}
+.back{display:inline-block;margin-bottom:18px;font-size:13.5px;text-decoration:none}
+.note{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:12px 14px;font-size:13.5px;color:var(--sub);margin:0 0 12px}
+.updated{margin-top:32px;color:var(--sub);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="page">
+  <a class="back" href="./">← 좌석 현황으로</a>
+  <h1>이용 안내</h1>
+
+  <h2>출처</h2>
+  <p>
+    이 서비스는 <b>경기도 버스정보 시스템(GBIS)</b>이 공공데이터포털(data.go.kr)을 통해 제공하는
+    버스 위치·잔여석 정보를 사용합니다.
+  </p>
+  <ul>
+    <li>제공기관: 경기도</li>
+    <li>제공처: 공공데이터포털 <a href="https://www.data.go.kr" target="_blank" rel="noopener">www.data.go.kr</a></li>
+    <li>활용 API: 경기도 버스위치정보 조회 서비스</li>
+  </ul>
+  <p class="note">
+    원본 운행 정보는 GBIS와 각 운수사가 제공하는 것이 정확합니다.
+    이 화면의 값은 그 데이터를 가공한 결과입니다.
+  </p>
+
+  <h2>면책</h2>
+  <p>
+    화면에 보이는 <b>“여유·빠듯·어려움”과 “N석 예상”은 관측 기반 예측이며 실제 탑승을 보장하지 않습니다.</b>
+    다음 경우에 실제와 다를 수 있습니다.
+  </p>
+  <ul>
+    <li>버스가 예상보다 일찍·늦게 도착하거나 증차·결행되는 경우</li>
+    <li>정류장에 다른 노선 대기자가 함께 서 있는 경우 — 판정은 해당 노선 대기자만 셉니다</li>
+    <li>관측이 부족한 시간대 — 화면에 “표본 적음”이나 점선 테두리로 표시됩니다</li>
+    <li>원본 API가 지연되거나 중단된 경우 — 마지막 수집 시각이 화면 상단에 표시됩니다</li>
+  </ul>
+  <p>
+    이 서비스를 근거로 한 이동 판단의 결과에 대해 운영자는 책임지지 않습니다.
+    운행 정보는 반드시 현장 안내와 GBIS 공식 정보를 함께 확인해 주세요.
+  </p>
+
+  <h2>개인정보</h2>
+  <p><b>이 서비스는 개인정보를 서버에 수집·저장하지 않습니다.</b></p>
+
+  <p>브라우저에만 저장되는 항목이 있습니다. 서버로 전송되지 않으며 브라우저 저장소를 비우면 사라집니다.</p>
+  <ul>
+    <li>목적지와 승차 정류장 — 다음 방문 때 다시 입력하지 않도록</li>
+    <li>탑승 기록 — 직접 입력하신 대기 인원·하차 인원·결과·메모</li>
+    <li>관측 로그 — 화면이 본 좌석 수치의 기록</li>
+  </ul>
+
+  <p><b>위치 정보</b>는 길찾기 링크를 만들 때만 브라우저에서 조회합니다.
+    좌표는 네이버지도 주소에 담겨 브라우저에서 바로 열리며, <b>이 서비스의 서버로는 전송되지 않습니다.</b>
+    위치 권한을 거부해도 좌석 현황은 그대로 동작합니다.</p>
+
+  <p><b>서버로 전송되는 것</b>은 실시간 좌석 조회 요청뿐이며, 담기는 값은 노선 번호(예: 3330)입니다.</p>
+
+  <p class="note">
+    호스팅 사업자(Vercel)는 서비스 운영을 위한 접속 기록(IP 주소, 브라우저 종류, 요청 시각 등)을
+    자체 정책에 따라 일정 기간 보관할 수 있습니다. 운영자는 이 기록을 별도로 수집하거나
+    다른 정보와 결합하지 않습니다.
+  </p>
+
+  <p>네이버지도 링크로 이동하시면 그때부터는 네이버의 정책이 적용됩니다.</p>
+
+  <h2>문의</h2>
+  <p>오류 제보나 문의는 저장소 이슈로 남겨 주세요.</p>
+
+  <p class="updated">최종 수정 2026-07-27</p>
+</div>
+</body>
+</html>

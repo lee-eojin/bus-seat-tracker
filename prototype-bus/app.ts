@@ -1,12 +1,11 @@
 import { boardingVerdict, expectedDemandAt, type BoardingVerdict } from '../shared/boarding.js';
-import { asList, isRecord, readHistoryPayload, readIdentifier, readLatestPayload, readNumber, readProfilePayload, type Direction, type DisplayStop, type DisplayVehicle, type HistoryBucket, type LatestPayload, type LatestRoute, type ProfileCell, type SeatState } from '../shared/model.js';
+import { asList, isNonBoardingStop, isRecord, readHistoryPayload, readIdentifier, readLatestPayload, readNumber, readProfilePayload, type Direction, type DisplayStop, type DisplayVehicle, type HistoryBucket, type LatestPayload, type LatestRoute, type ProfileCell, type SeatState } from '../shared/model.js';
 
 declare global {
   interface Window {
     __LATEST__?: unknown;
     __HISTORY__?: unknown;
     __PROFILE__?: unknown;
-    __CONFIG__?: unknown;
   }
 }
 
@@ -36,7 +35,8 @@ type RouteLocationState =
   | { kind: 'ready'; coordinates: RouteCoordinates }
   | { kind: 'unavailable' };
 
-const liveApiUrl = 'https://apis.data.go.kr/6410000/buslocationservice/v2/getBusLocationListv2';
+// 서버 프록시. GBIS 키는 서버 env에만 있고 브라우저는 노선명만 보낸다.
+const liveApiUrl = '/api/live';
 const liveFreshLimit = 180_000;
 const livePollIntervalMs = 30_000;
 const phase0LogLimit = 600;
@@ -170,12 +170,6 @@ function setBanner(message: string | null): void {
   if (message) banner.textContent = message;
 }
 
-function liveApiKey(): string | null {
-  const config = window.__CONFIG__;
-  if (!isRecord(config)) return null;
-  return typeof config.gbisApiKey === 'string' && config.gbisApiKey.length > 0 ? config.gbisApiKey : null;
-}
-
 function liveIsFresh(route: LatestRoute): boolean {
   return live.routeId === route.route.id && live.fetchedAt !== null && Date.now() - live.fetchedAt < liveFreshLimit;
 }
@@ -188,27 +182,22 @@ function directionOf(sequence: number | null, turnSequence: number | null): Dire
 // 라이브 응답의 차량번호(plateNo)는 읽지도 저장하지도 않는다 — 공개 정책과 동일 기준.
 function readLiveVehicles(payload: unknown, turnSequence: number | null): DisplayVehicle[] {
   if (!isRecord(payload)) return [];
-  const response = isRecord(payload.response) ? payload.response : payload;
-  const body = isRecord(response.msgBody) ? response.msgBody : null;
-  return asList(body ? body.busLocationList : undefined).flatMap((value) => {
+  return asList(payload.vehicles).flatMap((value) => {
     if (!isRecord(value)) return [];
-    const stationSeq = readNumber(value.stationSeq);
+    const stationSeq = readNumber(value.currentStopSequence);
     return [{
       id: null,
       stationSeq,
-      remainingSeats: readNumber(value.remainSeatCnt),
+      remainingSeats: readNumber(value.remainingSeats),
       crowded: readNumber(value.crowded),
-      status: readNumber(value.stateCd),
+      status: readNumber(value.status),
       direction: directionOf(stationSeq, turnSequence),
     }];
   });
 }
 
 function readApiQueryTime(payload: unknown): string | null {
-  if (!isRecord(payload)) return null;
-  const response = isRecord(payload.response) ? payload.response : payload;
-  const header = isRecord(response.msgHeader) ? response.msgHeader : null;
-  return header ? readIdentifier(header.queryTime) : null;
+  return isRecord(payload) ? readIdentifier(payload.apiQueryTime) : null;
 }
 
 // GBIS queryTime은 KST 벽시계 문자열이다 (예: 2026-07-21 17:38:11.123)
@@ -242,12 +231,11 @@ function appendPhase0Observation(route: LatestRoute, vehicles: DisplayVehicle[],
 }
 
 async function refreshLiveVehicles(): Promise<void> {
-  const apiKey = liveApiKey();
   const state = boardState();
-  if (!apiKey || state.kind !== 'ready') return;
+  if (state.kind !== 'ready') return;
   const route = state.route;
-  const requestUrl = new URL(liveApiUrl);
-  requestUrl.search = new URLSearchParams({ serviceKey: apiKey, format: 'json', routeId: route.route.id }).toString();
+  const requestUrl = new URL(liveApiUrl, location.origin);
+  requestUrl.search = new URLSearchParams({ route: route.route.name }).toString();
   try {
     const response = await fetch(requestUrl, { signal: AbortSignal.timeout(10_000) });
     if (!response.ok) throw new Error(`상태 ${response.status}`);
@@ -335,6 +323,9 @@ function recommendationFor(route: LatestRoute): Recommendation {
   for (let index = myIndex - 1; index >= 0; index -= 1) {
     const candidate = stops[index];
     if (!candidate) continue;
+    // 미정차구간은 승차 정류장이 될 수 없다. 히스토리 표본은 쌓이므로(버스가 지나가긴 한다)
+    // 거르지 않으면 "여기로 걸어가세요"라고 못 타는 곳을 추천한다.
+    if (isNonBoardingStop(candidate.name)) continue;
     const cell = historyCell(route.route.name, candidate.sequence);
     if (!cell || cell.samples < recommendationMinSamples) continue;
     if (fullRate(cell) < candidateThreshold) {
@@ -773,6 +764,9 @@ function forecastVehicle(route: LatestRoute, vehicle: DisplayVehicle, stops: Dis
   for (const stop of stops) {
     if (stop.sequence <= vehicle.stationSeq) continue;
     stopsAhead += 1;
+    // 미정차 지점은 승차할 수 없다. 수요는 계속 전파하되 판정은 만들지 않는다 —
+    // 못 타는 곳에 "여유"가 뜨면 그 자체가 잘못된 안내다.
+    const boardable = !isNonBoardingStop(stop.name);
     let arrivalMean = 0;
     for (let seats = 1; seats <= seatCapacity; seats += 1) arrivalMean += (distribution[seats] ?? 0) * seats;
     const timeBucket = bucketAtMinutesAhead(stopsAhead * minutesPerStop);
@@ -789,7 +783,7 @@ function forecastVehicle(route: LatestRoute, vehicle: DisplayVehicle, stops: Dis
       fullDepartureStreak: route.fullDepartureStreaks[String(stop.sequence)] ?? 0,
     });
     const streakKnown = route.fullDepartureStreaks[String(stop.sequence)] !== undefined;
-    forecasts.set(stop.sequence, { arrivalMean, boardableProbability, lowConfidence, verdict, streakKnown });
+    if (boardable) forecasts.set(stop.sequence, { arrivalMean, boardableProbability, lowConfidence, verdict, streakKnown });
   }
   return forecasts;
 }
@@ -801,7 +795,6 @@ function forecastTint(forecast: SeatForecast): string {
 }
 
 const verdictLabels: Record<BoardingVerdict, string> = { roomy: '여유', tight: '빠듯', unlikely: '어려움' };
-
 
 function nextVehicleFor(stopSequence: number, vehicles: DisplayVehicle[]): DisplayVehicle | null {
   return vehicles
@@ -843,7 +836,14 @@ function renderAxis(route: LatestRoute): void {
     const name = document.createElement('div');
     name.className = 'stop-name';
     name.textContent = stop.name ?? `정류장 ${stop.sequence}`;
-    if (stop.isTurn) {
+    // 노선이 지나가기만 하는 지점. 이름에 이미 표기가 있으므로 짧게만 덧붙인다.
+    const passThroughStop = isNonBoardingStop(stop.name);
+    if (passThroughStop) {
+      row.classList.add('pass-through');
+      const marker = document.createElement('small');
+      marker.textContent = '미정차구간';
+      name.append(marker);
+    } else if (stop.isTurn) {
       const marker = document.createElement('small');
       marker.textContent = '회차 지점';
       name.append(marker);
@@ -857,12 +857,13 @@ function renderAxis(route: LatestRoute): void {
     row.append(dot, name);
 
     if (forecast) {
-      // 판정이 주역, 좌석은 근거. 직전 버스 상태를 관측 못 했으면 배지를 점선으로 낮춘다
-      // (design/board-mockup.html).
-      const verdict = document.createElement('div');
-      verdict.className = 'verdict';
+      // 판정이 주역, 좌석은 근거. 둘을 같은 크기로 나란히 두면 무엇을 봐야 할지 알 수 없다.
+      const verdictBox = document.createElement('div');
+      verdictBox.className = 'verdict';
 
       const badge = document.createElement('span');
+      // 만석 연속을 관측하지 못했으면 점선 테두리로 확신 정도만 낮춘다. 기호(?)를 붙이면
+      // "여유?"가 한 단어처럼 읽혀 판정 자체가 흔들려 보인다.
       badge.className = `badge ${forecastTint(forecast)}${forecast.streakKnown ? '' : ' unverified'}`;
       badge.textContent = verdictLabels[forecast.verdict];
 
@@ -870,14 +871,14 @@ function renderAxis(route: LatestRoute): void {
       seats.className = 'seats';
       seats.textContent = `${Math.round(forecast.arrivalMean)}석 예상`;
       if (forecast.lowConfidence) {
-        const sampleNote = document.createElement('span');
-        sampleNote.className = 'thin';
-        sampleNote.textContent = ' · 표본 적음';
-        seats.append(sampleNote);
+        const thin = document.createElement('span');
+        thin.className = 'thin';
+        thin.textContent = ' · 표본 적음';
+        seats.append(thin);
       }
 
-      verdict.append(badge, seats);
-      row.append(verdict);
+      verdictBox.append(badge, seats);
+      row.append(verdictBox);
     } else {
       const probabilityCell = historyCell(route.route.name, stop.sequence);
       if (probabilityCell && probabilityCell.samples >= recommendationMinSamples) {
@@ -894,7 +895,9 @@ function renderAxis(route: LatestRoute): void {
       pill.textContent = seatLabel(vehicle);
       row.append(pill);
     }
-    const stopCoordinates: RouteCoordinates | null = stop.latitude === null || stop.longitude === null
+    // 미정차구간에는 길찾기를 걸지 않는다. 여기서는 탈 수 없으므로 안내할 이유가 없고,
+    // 버튼이 있으면 "가면 탈 수 있다"는 뜻으로 읽힌다.
+    const stopCoordinates: RouteCoordinates | null = passThroughStop || stop.latitude === null || stop.longitude === null
       ? null
       : { latitude: stop.latitude, longitude: stop.longitude };
     if (stopCoordinates) {
@@ -997,14 +1000,7 @@ function reloadData(): void {
 }
 
 function loadLiveConfig(): void {
-  const script = document.createElement('script');
-  script.src = `data/config.js?v=${Date.now()}`;
-  script.addEventListener('load', () => {
-    script.remove();
-    void refreshLiveVehicles();
-  });
-  script.addEventListener('error', () => script.remove());
-  document.body.append(script);
+  void refreshLiveVehicles();
 }
 
 getElement<HTMLFormElement>('destination-form').addEventListener('submit', (event) => {
