@@ -953,6 +953,11 @@ getElement<HTMLFormElement>('destination-form').addEventListener('submit', (even
   render();
 });
 
+// Phase 0 관측 로그는 모델 보정용이라 수집자만 쓴다. `?dev`를 붙였을 때만 드러낸다.
+if (new URLSearchParams(location.search).has('dev')) {
+  getElement<HTMLSpanElement>('phase0-tools').classList.add('show');
+}
+
 getElement<HTMLButtonElement>('phase0-export').addEventListener('click', () => {
   let observations: unknown = [];
   let boardingRecords: unknown = [];
