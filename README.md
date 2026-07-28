@@ -65,6 +65,8 @@ open prototype-bus/index.html
 | 명령 | 하는 일 |
 |---|---|
 | `npm run typecheck` | 산출물 없이 타입 검사 |
+| `npm test` | 수집 스케줄 경계값 테스트 |
+| `npm run budget` | 호출 예산 계산. 한도를 넘으면 종료 코드 1 |
 | `npm run build` | `dist/`에 JavaScript |
 | `npm run backtest` | rolling-origin 백테스트 |
 | `npm run score` | 발행된 라이브 예측을 나중 관측과 대조 |
@@ -76,12 +78,12 @@ open prototype-bus/index.html
 `GET /api/live?route=3330`
 
 ```json
-{ "routeName": "3330", "routeId": "204000057", "apiQueryTime": "20260727083000",
-  "vehicles": [{ "id": "...", "currentStopSequence": 12, "remainingSeats": 7,
+{ "routeName": "3330", "routeId": "204000057", "apiQueryTime": "2026-07-28 13:30:36.426",
+  "vehicles": [{ "currentStopSequence": 12, "remainingSeats": 7,
                  "crowded": 1, "status": 0 }] }
 ```
 
-GBIS 인증키는 서버 환경변수에만 있고 브라우저로 내려가지 않는다. 응답에서 차량번호는 제거된다. 조회 가능한 노선은 `server/gbis.ts`의 화이트리스트뿐이고 그 밖은 400이다. 프록시가 실패하면 화면은 수집 스냅샷으로 되돌아간다.
+GBIS 인증키는 서버 환경변수에만 있고 브라우저로 내려가지 않는다. 응답에서 차량번호(`plateNo`)와 원본 차량 ID(`vehId`)는 제거된다. 조회 가능한 노선은 `server/gbis.ts`의 화이트리스트뿐이고 그 밖은 400이다. 프록시가 실패하면 화면은 수집 스냅샷으로 되돌아간다.
 
 캐시는 `s-maxage=120`이다. **일 호출 한도 1,000회가 이 서비스의 구속 제약**이라 노선당 2분에 1회가 상한이다 (`DEPLOY.md` §6). 이 값을 낮추기 전에 예산부터 다시 계산한다.
 
@@ -103,18 +105,24 @@ GBIS 인증키는 서버 환경변수에만 있고 브라우저로 내려가지 
 
 ```
 bus-seat-collector/collector.ts   GBIS 수집기. 차량 ID는 HMAC 가명화
+bus-seat-collector/schedule.ts    수집 창과 간격. 워크플로와 예산 계산기가 같이 쓴다
 shared/model.ts                   도메인 모델. 승차 불가 지점 판정
-shared/profile.ts                 순수요 프로파일, 구간합 역산
-shared/boarding.ts                탑승 가능성 판정 — 화면과 백테스트가 같은 규칙을 쓴다
-prototype-bus/build-data.ts       JSONL → 브라우저 데이터 번들
-prototype-bus/app.ts              노선 축 UI, 좌석 분포 전파, 추천, 길찾기
+shared/profile.ts                 순수요 프로파일, 구간합 역산, 좌석 분포 전파
+shared/boarding.ts                탑승 가능성 판정. 화면과 백테스트가 같은 규칙을 쓴다
+prototype-bus/build-data.ts       JSONL을 브라우저 데이터 번들로
+prototype-bus/app.ts              노선 축 UI, 추천, 길찾기
 backtest/backtest.ts              rolling-origin 백테스트
 backtest/queue-recovery.ts        대기 인원 복원
 backtest/score-predictions.ts     라이브 예측 채점
+backtest/data-source.ts           스냅샷과 노선 캐시 로더
 server/gbis.ts                    GBIS 클라이언트 (서버 전용)
 api/live.ts                       Vercel 함수
 scripts/build-site.mjs            배포용 번들 조립
+scripts/call-budget.mjs           호출 예산 계산기
 ```
+
+예보 모델은 `shared/profile.ts` 한 곳에만 있다. 화면과 백테스트와 정적 예측이 모두 이 구현을
+거치므로 백테스트가 잰 오차가 사용자가 보는 예보를 그대로 보증한다.
 
 ### 승차할 수 없는 정류장
 
@@ -131,9 +139,12 @@ GBIS는 톨게이트·분기점처럼 노선이 지나가기만 하는 지점을
 | | |
 |---|---|
 | `DEPLOY.md` | 배포 절차, 호출 예산, 남은 것 |
+| `docs/proposal.md` | 기획서. 무엇을 왜 만드는가 |
+| `docs/market-size.md` | 두 노선의 평일 수송 규모 측정 |
+| `docs/boarding-model-v2.md` | 탑승 모델 v2 설계. 현행 구현의 근거 |
+| `docs/boarding-model.md` | 탑승 모델 v1 명세. 백테스트의 비교 기준선으로 보존 |
 | `docs/queue-recovery.md` | 대기 인원 복원 방법과 그 한계 |
 | `docs/validation-2026-07-24.md` | 층-1 검증 보고서 |
-| `docs/boarding-model.md` | 탑승 모델 |
 
 ## 브랜치
 
