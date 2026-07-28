@@ -180,16 +180,39 @@ jobs:
             const dataDirectory = path.join(privateDataRoot, 'data');
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-            // KST 피크 창과 그 안의 조밀 구간. 분 단위 [창 시작, 창 끝, 조밀 시작, 조밀 끝].
-            // 평일 06:30-10:00(조밀 07:00-09:00), 17:30-20:30(조밀 18:00-19:30). 주말은 창 없이 균등 스냅샷만 한다.
-            // 조밀 구간은 정류장별 도착·출발을 한 번의 관측으로 잡기 위한 것이다(docs/queue-recovery.md §8).
+            // KST 수집 창. 창마다 기본 간격이 다르고 그 안에 더 조밀한 구간을 둘 수 있다.
+            //   start, end       창 경계 (KST 자정 기준 분). 배열은 start 오름차순이어야 한다.
+            //                    경계가 맞닿은 창은 앞의 것이 먼저 잡힌다.
+            //   interval         창의 기본 간격(초)
+            //   denseStart/End   창 안의 조밀 구간
+            //   denseDay         조밀 구간을 적용할 요일(0=일). 없으면 매일
+            // 주말은 창 없이 균등 스냅샷만 한다.
+            //
+            // 피크 조밀 구간은 정류장별 도착·출발을 한 번의 관측으로 잡기 위한 것이다(docs/queue-recovery.md §8).
             // 10분 간격에서는 버스가 관측 사이에 5~7정류장을 지나 정류장 단위 승차량을 읽을 수 없다.
             // 배치 근거는 만석 분포 실측(RUNNING.md)과 필드 기록 시각이다. 아침 절정 07:00-08:00과
             // 범계역 기록(08:37), 저녁 절정 18:00-18:30과 판교역 기록(18:57)이 모두 안에 들어온다.
             // 전 피크를 60초로 돌리면 API 한도(기능당 1,000콜/일)에 육박하므로 핵심 시간대에만 적용한다.
+            //
+            // 낮 창은 매시 1회 크론이 남기던 공백을 메운다. 60분 간격 관측은 순수요 학습의 운행
+            // 분할 기준(shared/profile.ts runSplitGapMs 45분)에 전부 걸려 관측쌍을 하나도 만들지
+            // 못했고, 그 결과 10:30~16:30 버킷의 μ가 통째로 0이었다. μ가 0이면 판정이 좌석만 보고
+            // 무조건 여유로 나간다. 이 구간은 잔여석 0 판독이 실측 0건이라 검열이 없고, 검열이
+            // 없으면 좌석 차이가 곧 순수요라 구간합 역산이 편향 없이 식별된다. 아침만큼 촘촘할
+            // 필요가 없어 20분으로 둔다.
+            //
+            // 수요일 낮 보정 구간은 역산의 정답을 만든다. 2분 간격이면 관측 사이 이동이 1정류장
+            // 안쪽이라 정류장별 승차가 직접 읽히고, 같은 구간을 20분으로 다운샘플해 역산한 값과
+            // 대조할 수 있다. 아침은 검열 때문에 이 대조가 성립하지 않는다.
             const peakIntervalSeconds = 600;
             const denseIntervalSeconds = 60;
-            const weekdayWindows = [[390, 600, 420, 540], [1050, 1230, 1080, 1170]];
+            const daytimeIntervalSeconds = 1200;
+            const calibrationIntervalSeconds = 120;
+            const weekdayWindows = [
+              { start: 390, end: 600, interval: peakIntervalSeconds, denseStart: 420, denseEnd: 540, denseInterval: denseIntervalSeconds },
+              { start: 600, end: 960, interval: daytimeIntervalSeconds, denseStart: 780, denseEnd: 810, denseInterval: calibrationIntervalSeconds, denseDay: 3 },
+              { start: 1050, end: 1230, interval: peakIntervalSeconds, denseStart: 1080, denseEnd: 1170, denseInterval: denseIntervalSeconds },
+            ];
             const weekendWindows = [];
 
             const seoulClock = (atMs) => new Date(atMs + 9 * 3600 * 1000);
@@ -200,12 +223,13 @@ jobs:
             function activeWindow() {
               const shifted = seoulClock(Date.now());
               const minutes = clockMinutes(shifted);
-              const found = windowsFor(shifted).find(([start, end]) => minutes >= start - 60 && minutes < end);
+              const found = windowsFor(shifted).find((candidate) => minutes >= candidate.start - 60 && minutes < candidate.end);
               if (!found) return null;
               const kstMidnightMs = shifted.setUTCHours(0, 0, 0, 0);
               return {
-                startMs: kstMidnightMs + found[0] * 60000 - 9 * 3600 * 1000,
-                endMs: kstMidnightMs + found[1] * 60000 - 9 * 3600 * 1000,
+                startMs: kstMidnightMs + found.start * 60000 - 9 * 3600 * 1000,
+                endMs: kstMidnightMs + found.end * 60000 - 9 * 3600 * 1000,
+                interval: found.interval,
               };
             }
 
@@ -213,11 +237,13 @@ jobs:
             function scheduledIntervalSeconds(atMs) {
               const shifted = seoulClock(atMs);
               const minutes = clockMinutes(shifted);
-              const found = windowsFor(shifted).find(([start, end]) => minutes >= start && minutes < end);
+              const found = windowsFor(shifted).find((candidate) => minutes >= candidate.start && minutes < candidate.end);
               if (!found) return peakIntervalSeconds;
-              const [, , denseStart, denseEnd] = found;
-              const dense = denseStart !== undefined && minutes >= denseStart && minutes < denseEnd;
-              return dense ? denseIntervalSeconds : peakIntervalSeconds;
+              const dense = found.denseStart !== undefined
+                && minutes >= found.denseStart
+                && minutes < found.denseEnd
+                && (found.denseDay === undefined || found.denseDay === shifted.getUTCDay());
+              return dense ? found.denseInterval : found.interval;
             }
 
             // 스냅샷 운행 시간대 (KST): 평일 05:00-21:00, 주말 06:00-23:00 정시 스냅샷.
@@ -242,7 +268,7 @@ jobs:
               if (window) {
                 loopStartMs = window.startMs;
                 loopEndMs = window.endMs;
-                core.info(`피크 창 수집: ${new Date(window.endMs).toISOString()}까지 ${peakIntervalSeconds}초 간격, 조밀 구간은 ${denseIntervalSeconds}초`);
+                core.info(`창 수집: ${new Date(window.endMs).toISOString()}까지 기본 ${window.interval}초 간격, 조밀 구간은 창 설정을 따른다`);
               } else if (withinServiceHours()) {
                 core.info('비피크: 1회 스냅샷만 수집');
               } else {
@@ -299,6 +325,18 @@ jobs:
               for (const [filePath, signature] of changed) uploadedState.set(filePath, signature);
             }
 
+            // 사이클은 GBIS를 먼저 때리고 그다음 업로드한다. 업로드가 죽어도 호출은 이미 나간 뒤다.
+            // 2026-07-27 저녁에 BUS_DATA_REPO_TOKEN이 만료돼 51사이클이 연속 401로 실패했는데,
+            // 루프는 창 끝까지 돌아 노선까지 세면 102회를 태우고 데이터는 한 건도 남기지 못했다.
+            // core.warning이라 실행은 success로 끝나 그 사실이 드러나지도 않았다.
+            //
+            // 인증 실패는 재시도해도 안 풀리므로 첫 번째에 끊는다. 그 밖의 실패는 일시적일 수 있어
+            // 연속 3회까지 봐준다. 어느 쪽이든 끊고 나면 실행을 실패로 남겨 알림이 뜨게 하고,
+            // 창이 남아 있으면 다음 정시 실행이 이어받는다(activeWindow는 창 안이면 언제든 인수한다).
+            const maxConsecutiveFailures = 3;
+            let consecutiveFailures = 0;
+            let abortReason = null;
+
             do {
               try {
                 execFileSync('node', ['dist/bus-seat-collector/collector.js', '--once'], {
@@ -307,9 +345,19 @@ jobs:
                   env: process.env,
                 });
                 await uploadChangedFiles();
+                consecutiveFailures = 0;
               } catch (error) {
-                core.warning(`수집 사이클 실패, 다음 사이클에서 재시도: ${error.message}`);
+                consecutiveFailures += 1;
+                // octokit HttpError의 status. execFileSync도 status(종료 코드)를 달지만 0~255라 겹치지 않는다.
+                if (error.status === 401 || error.status === 403) {
+                  abortReason = `데이터 저장소 인증 실패(${error.status}). BUS_DATA_REPO_TOKEN을 갱신한다 — DEPLOY.md §3: ${error.message}`;
+                } else if (consecutiveFailures >= maxConsecutiveFailures) {
+                  abortReason = `수집 사이클 연속 ${consecutiveFailures}회 실패로 중단한다. 호출만 나가고 데이터가 남지 않는다: ${error.message}`;
+                } else {
+                  core.warning(`수집 사이클 실패, 다음 사이클에서 재시도: ${error.message}`);
+                }
               }
+              if (abortReason) break;
               const now = Date.now();
               if (now < loopStartMs) {
                 await sleep(loopStartMs - now);
@@ -319,3 +367,5 @@ jobs:
               if (now + intervalSeconds * 1000 >= loopEndMs) break;
               await sleep(intervalSeconds * 1000);
             } while (Date.now() < loopEndMs);
+
+            if (abortReason) core.setFailed(abortReason);
