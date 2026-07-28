@@ -1,5 +1,6 @@
 import { boardingVerdict, expectedDemandAt, type BoardingVerdict } from '../shared/boarding.js';
-import { asList, isNonBoardingStop, isRecord, readHistoryPayload, readIdentifier, readLatestPayload, readNumber, readProfilePayload, type Direction, type DisplayStop, type DisplayVehicle, type HistoryBucket, type LatestPayload, type LatestRoute, type ProfileCell, type SeatState } from '../shared/model.js';
+import { asList, isNonBoardingStop, isRecord, readHistoryPayload, readIdentifier, readLatestPayload, readNumber, readProfilePayload, type Direction, type DisplayStop, type DisplayVehicle, type HistoryBucket, type LatestPayload, type LatestRoute, type ProfileRoute, type SeatState } from '../shared/model.js';
+import { applyNetDemand, defaultSeatCapacity as seatCapacity, netDemandAt as sharedNetDemandAt, type NetDemandEstimate } from '../shared/profile.js';
 
 declare global {
   interface Window {
@@ -665,24 +666,18 @@ interface SeatForecast {
   streakKnown: boolean;
 }
 
-interface NetDemandEstimate {
-  mean: number;
-  sd: number;
-  lowConfidence: boolean;
+const minutesPerStop = 2;
+
+// 프로파일 조달만 화면 쪽 일이고, 순수요 추정과 좌석 전파는 shared/profile.ts가 한다.
+// 백테스트와 정적 예측이 쓰는 구현과 같아야 검증 오차가 이 화면을 보증한다.
+function profileFor(routeName: string): ProfileRoute | null {
+  return readProfilePayload(window.__PROFILE__)?.routes[routeName] ?? null;
 }
 
-// 3330에는 2층버스가 다녀 잔여석 68까지 실측됨 — 일반차 44석 가정 금지 (v2 Phase 0 정원 항목)
-const seatCapacity = 80;
-const minutesPerStop = 2;
-const demandMinWeight = 1;
-
-function normalCdf(value: number): number {
-  const scaled = value / Math.SQRT2;
-  const sign = scaled < 0 ? -1 : 1;
-  const t = 1 / (1 + 0.3275911 * Math.abs(scaled));
-  const polynomial = ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t;
-  const erf = 1 - polynomial * Math.exp(-scaled * scaled);
-  return 0.5 * (1 + sign * erf);
+function netDemandAt(routeName: string, sequence: number, bucket: number, weekend: boolean): NetDemandEstimate {
+  const profile = profileFor(routeName);
+  if (!profile) return { mean: 0, sd: 3, lowConfidence: true };
+  return sharedNetDemandAt(profile, sequence, bucket, weekend);
 }
 
 function bucketAtMinutesAhead(minutesAhead: number): { bucket: number; weekend: boolean } {
@@ -692,61 +687,6 @@ function bucketAtMinutesAhead(minutesAhead: number): { bucket: number; weekend: 
     bucket: seoulClock.getUTCHours() * 2 + (seoulClock.getUTCMinutes() >= 30 ? 1 : 0),
     weekend: day === 0 || day === 6,
   };
-}
-
-function profileCellAt(routeName: string, sequence: number, bucket: number, weekend: boolean): ProfileCell | null {
-  const payload = readProfilePayload(window.__PROFILE__);
-  const route = payload?.routes[routeName];
-  if (!route) return null;
-  return (weekend ? route.weekend : route.weekday)[String(sequence)]?.[String(((bucket % 48) + 48) % 48)] ?? null;
-}
-
-function netDemandAt(routeName: string, sequence: number, bucket: number, weekend: boolean): NetDemandEstimate {
-  const exact = profileCellAt(routeName, sequence, bucket, weekend);
-  let weight = exact?.weight ?? 0;
-  let demandSum = exact?.demandSum ?? 0;
-  let demandSquaredSum = exact?.demandSquaredSum ?? 0;
-  let censoredWeight = exact?.censoredWeight ?? 0;
-  if (weight < demandMinWeight) {
-    for (const nearby of [bucket - 1, bucket + 1]) {
-      const cell = profileCellAt(routeName, sequence, nearby, weekend);
-      if (!cell) continue;
-      weight += cell.weight;
-      demandSum += cell.demandSum;
-      demandSquaredSum += cell.demandSquaredSum;
-      censoredWeight += cell.censoredWeight;
-    }
-  }
-  if (weight <= 0) return { mean: 0, sd: 3, lowConfidence: true };
-  const mean = demandSum / weight;
-  const variance = Math.max(demandSquaredSum / weight - mean * mean, 1);
-  const lowConfidence = weight < demandMinWeight || censoredWeight > weight * 0.5;
-  return { mean, sd: Math.sqrt(variance) + (lowConfidence ? 1 : 0), lowConfidence };
-}
-
-function applyNetDemand(distribution: number[], estimate: NetDemandEstimate): number[] {
-  const next = new Array<number>(seatCapacity + 1).fill(0);
-  const lowest = Math.floor(estimate.mean - 3.5 * estimate.sd);
-  const highest = Math.ceil(estimate.mean + 3.5 * estimate.sd);
-  const demandProbabilities: Array<[number, number]> = [];
-  let total = 0;
-  for (let demand = lowest; demand <= highest; demand += 1) {
-    const probability = normalCdf((demand + 0.5 - estimate.mean) / estimate.sd) - normalCdf((demand - 0.5 - estimate.mean) / estimate.sd);
-    if (probability > 1e-4) {
-      demandProbabilities.push([demand, probability]);
-      total += probability;
-    }
-  }
-  if (total <= 0) return distribution;
-  for (let seats = 0; seats <= seatCapacity; seats += 1) {
-    const mass = distribution[seats] ?? 0;
-    if (mass <= 0) continue;
-    for (const [demand, probability] of demandProbabilities) {
-      const after = Math.min(seatCapacity, Math.max(0, seats - demand));
-      next[after] = (next[after] ?? 0) + mass * (probability / total);
-    }
-  }
-  return next;
 }
 
 function forecastVehicle(route: LatestRoute, vehicle: DisplayVehicle, stops: DisplayStop[]): Map<number, SeatForecast> {

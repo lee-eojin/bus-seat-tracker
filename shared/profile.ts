@@ -152,7 +152,9 @@ export function buildHistoryRoute(snapshots: Snapshot[], acceptDate?: (date: str
   return history;
 }
 
-// ── 좌석 순전파 (app.ts forecastVehicle과 동일한 분포 기반 DP를 순수 함수로) ──
+// ── 좌석 순전파 ──
+// 화면(app.ts forecastVehicle), 정적 예측(build-data.ts), 백테스트가 모두 여기를 거친다.
+// 구현이 갈라지면 백테스트가 잰 오차가 사용자가 보는 예보를 보증하지 못한다.
 
 export interface NetDemandEstimate {
   mean: number;
@@ -160,6 +162,8 @@ export interface NetDemandEstimate {
   lowConfidence: boolean;
 }
 
+// 3330에는 2층버스가 다녀 잔여석 68까지 실측됐다. 일반차 44석을 정원으로 가정하면 안 된다
+// (docs/boarding-model-v2.md Phase 0 정원 항목).
 export const defaultSeatCapacity = 80;
 export const defaultDemandMinWeight = 1;
 
