@@ -3,8 +3,8 @@ import { asList, isRecord, readIdentifier, readNumber } from '../shared/model.js
 // GBIS 클라이언트 (서버 전용).
 //
 // 키는 `process.env`에서만 읽는다 — 클라이언트가 직접 GBIS를 부르던 경로를 대체하는 것이
-// 이 파일의 존재 이유다. 응답에서 차량번호(`plateNo`)를 제거해 데이터 경계를 유지한다
-// (bus-seat-collector/RUNNING.md '데이터 경계').
+// 이 파일의 존재 이유다. 응답에서 차량번호(`plateNo`)와 원본 차량 ID(`vehId`)를 모두 제거해
+// 데이터 경계를 유지한다 (bus-seat-collector/RUNNING.md '데이터 경계').
 
 const apiBaseUrl = 'https://apis.data.go.kr/6410000';
 const vehicleLocationPath = '/buslocationservice/v2/getBusLocationListv2';
@@ -17,7 +17,6 @@ export const allowedRoutes: Record<string, string> = {
 };
 
 export interface LiveVehicle {
-  id: string | null;
   currentStopSequence: number | null;
   remainingSeats: number | null;
   crowded: number | null;
@@ -53,11 +52,10 @@ function readQueryTime(payload: unknown): string | null {
   return header ? readIdentifier(header.queryTime) : null;
 }
 
-// 화면이 쓰는 필드만 통과시킨다. plateNo는 여기서 끊긴다.
+// 화면이 쓰는 필드만 통과시킨다. plateNo와 vehId는 여기서 끊긴다.
 function readVehicle(value: unknown): LiveVehicle | null {
   if (!isRecord(value)) return null;
   return {
-    id: readIdentifier(value.vehId),
     currentStopSequence: readNumber(value.stationSeq),
     remainingSeats: readNumber(value.remainSeatCnt),
     crowded: readNumber(value.crowded),
