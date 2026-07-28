@@ -2,11 +2,11 @@ import { allowedRoutes, fetchLiveSnapshot, GbisError } from '../server/gbis.js';
 
 // GET /api/live?route=3330
 //
-// 캐시 TTL이 이 서비스의 실시간성 상한을 정한다. 공공데이터포털 일 한도가 1,000회인데
-// 수집이 이미 약 482회를 쓰므로 웹 가용분은 약 518회다. 출퇴근 6.5시간 기준으로
-// 30초 캐시는 1,560회, 60초는 780회로 둘 다 예산을 넘고 120초라야 390회로 들어간다
-// (docs/../findings.md §0). CDN이 이 헤더를 보고 origin 호출을 눌러 주므로
-// 동시 접속자 수와 무관하게 노선당 120초에 1회로 유지된다.
+// 캐시 TTL이 이 서비스의 실시간성 상한을 정한다. 공공데이터포털 일 한도 1,000회를
+// 수집과 나눠 쓰는데, 30초 캐시는 1,560회, 60초는 780회로 둘 다 예산을 넘고 120초라야
+// 390회로 들어간다. 이 값을 낮추기 전에 `npm run budget`을 돌린다 (DEPLOY.md §6).
+// CDN이 이 헤더를 보고 origin 호출을 눌러 주므로 동시 접속자 수와 무관하게
+// 노선당 120초에 1회로 유지된다.
 const cacheSeconds = 120;
 const staleWhileRevalidateSeconds = 240;
 
