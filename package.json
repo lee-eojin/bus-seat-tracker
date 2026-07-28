@@ -14,6 +14,7 @@
     "backtest": "npm run build && node dist/backtest/backtest.js",
     "score": "npm run build && node dist/backtest/score-predictions.js",
     "queue": "npm run build && node dist/backtest/queue-recovery.js",
+    "budget": "npm run build && node scripts/call-budget.mjs",
     "build:site": "node scripts/build-site.mjs"
   },
   "devDependencies": {
