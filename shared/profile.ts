@@ -353,7 +353,7 @@ export function buildDeconvolvedProfileRoute(snapshots: Snapshot[], acceptDate?:
     const target = groupName === 'weekend' ? profile.weekend : profile.weekday;
     const totals = spans.map((span) => span.total);
     const means = solveSpanSums(spans, totals, null);
-    const squaredResiduals = spans.map((span, index) => ((totals[index] ?? 0) - (means.fitted[index] ?? 0)) ** 2);
+    const squaredResiduals = totals.map((total, index) => (total - (means.fitted[index] ?? 0)) ** 2);
     const variances = solveSpanSums(spans, squaredResiduals, 0);
 
     const coverCounts = new Map<number, number>();
