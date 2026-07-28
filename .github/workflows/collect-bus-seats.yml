@@ -325,6 +325,18 @@ jobs:
               for (const [filePath, signature] of changed) uploadedState.set(filePath, signature);
             }
 
+            // 사이클은 GBIS를 먼저 때리고 그다음 업로드한다. 업로드가 죽어도 호출은 이미 나간 뒤다.
+            // 2026-07-27 저녁에 BUS_DATA_REPO_TOKEN이 만료돼 51사이클이 연속 401로 실패했는데,
+            // 루프는 창 끝까지 돌아 노선까지 세면 102회를 태우고 데이터는 한 건도 남기지 못했다.
+            // core.warning이라 실행은 success로 끝나 그 사실이 드러나지도 않았다.
+            //
+            // 인증 실패는 재시도해도 안 풀리므로 첫 번째에 끊는다. 그 밖의 실패는 일시적일 수 있어
+            // 연속 3회까지 봐준다. 어느 쪽이든 끊고 나면 실행을 실패로 남겨 알림이 뜨게 하고,
+            // 창이 남아 있으면 다음 정시 실행이 이어받는다(activeWindow는 창 안이면 언제든 인수한다).
+            const maxConsecutiveFailures = 3;
+            let consecutiveFailures = 0;
+            let abortReason = null;
+
             do {
               try {
                 execFileSync('node', ['dist/bus-seat-collector/collector.js', '--once'], {
@@ -333,9 +345,19 @@ jobs:
                   env: process.env,
                 });
                 await uploadChangedFiles();
+                consecutiveFailures = 0;
               } catch (error) {
-                core.warning(`수집 사이클 실패, 다음 사이클에서 재시도: ${error.message}`);
+                consecutiveFailures += 1;
+                // octokit HttpError의 status. execFileSync도 status(종료 코드)를 달지만 0~255라 겹치지 않는다.
+                if (error.status === 401 || error.status === 403) {
+                  abortReason = `데이터 저장소 인증 실패(${error.status}). BUS_DATA_REPO_TOKEN을 갱신한다 — DEPLOY.md §3: ${error.message}`;
+                } else if (consecutiveFailures >= maxConsecutiveFailures) {
+                  abortReason = `수집 사이클 연속 ${consecutiveFailures}회 실패로 중단한다. 호출만 나가고 데이터가 남지 않는다: ${error.message}`;
+                } else {
+                  core.warning(`수집 사이클 실패, 다음 사이클에서 재시도: ${error.message}`);
+                }
               }
+              if (abortReason) break;
               const now = Date.now();
               if (now < loopStartMs) {
                 await sleep(loopStartMs - now);
@@ -345,3 +367,5 @@ jobs:
               if (now + intervalSeconds * 1000 >= loopEndMs) break;
               await sleep(intervalSeconds * 1000);
             } while (Date.now() < loopEndMs);
+
+            if (abortReason) core.setFailed(abortReason);
