@@ -8,13 +8,28 @@
 
 ---
 
-## 현재 Phase: **S4 — 배포 (Preview 확인 완료, Production 대기)**
+## 현재 Phase: **S4 — 배포 (Production 파이프라인 복구 대기)**
 
 S1~S3은 끝났고 main에 병합됐다(PR #9, #10). Git 연동으로 푸시가 곧 배포다.
 
-남은 것은 셋이다. **Deployment Protection 해제**(켜져 있어 로그인 없이는 못 본다),
-**Production 환경변수 2개**(없어서 프로덕션 빌드가 실패한다), **실기기 확인**.
-전부 Vercel 대시보드 작업이라 코드로 할 수 있는 일이 없다.
+**Deployment Protection은 07-28에 해제했다.** 로그인 없이 열린다.
+
+막힌 것은 Production 환경변수 2개다. 없어서 프로덕션 빌드가 계속 실패했고,
+그 결과 `outputs-eta-fawn.vercel.app`이 `/prototype-bus/` 경로가 생기기도 전의
+배포에 묶여 있다. Preview에는 변수가 있어 빌드가 되므로 지금 쓸 수 있는 건
+배포별 Preview URL뿐인데, 그 주소는 배포마다 바뀐다.
+
+### 07-28 코드 정리 (PR #16, #17, #21, #22, #23)
+
+리뷰에서 나온 구조 문제를 정리했다. 자세한 내용은 `progress.md` 07-28 항목.
+
+- 예보 모델이 두 벌이었다. 백테스트는 `shared/profile.ts`, 화면은 `app.ts` 복사본을
+  썼다. 검증 수치가 화면을 보증하지 못하는 상태였다. 통일했고 8,736쌍 대조로
+  동작 동일을 확인했다.
+- 수집 스케줄이 워크플로 인라인 JS에만 있어 검산이 불가능했고 예산 표가 실제와
+  어긋났다. `bus-seat-collector/schedule.ts`로 빼고 `npm run budget`이 계산하게 했다.
+- 테스트가 0이었다. 스케줄 경계값 16개를 붙였다 (`npm test`).
+- 수집 사이클이 연속 실패해도 창 끝까지 돌며 호출만 태우던 것을 끊게 했다.
 
 ---
 
@@ -162,11 +177,15 @@ shared/            그대로 — 서버·클라이언트 공용
 - [x] Preview 환경변수 등록 — `GYEONGGI_BUS_API_KEY`, `BUS_DATA_REPO_TOKEN`
 - [x] 프리뷰 배포 — 푸시 16초 만에 자동 배포, 데이터 클론·집계·번들 조립까지 통과
 - [~] GitHub 시크릿 `VERCEL_DEPLOY_HOOK_URL` — **불필요해졌다.** Git 연동으로 푸시가 배포를 일으킨다
-- [ ] **Deployment Protection 해제** — 켜져 있어 로그인 없이는 302로 SSO를 탄다. 인터뷰 때 링크를 보여주려면 필수
-- [ ] Production 환경변수 2개 — 없어서 프로덕션 빌드가 실패한다 (`BUS_DATA_DIR 또는 BUS_DATA_REPO_TOKEN 중 하나가 필요합니다`)
+- [x] **Deployment Protection 해제** (07-28) — Vercel Authentication을 껐다. 로그인 없이 열린다
+- [ ] **Production 환경변수 2개** — 없어서 프로덕션 빌드가 실패한다 (`BUS_DATA_DIR 또는 BUS_DATA_REPO_TOKEN 중 하나가 필요합니다`).
+      대시보드에서 Preview 값이 읽히는지부터 확인한다. `[SENSITIVE]`면 재발급이고, 그때는 Actions 시크릿도 같이 갱신해야 수집이 안 끊긴다
+- [ ] **프로덕션 도메인 복구 확인** — 환경변수를 넣고 `315a69d` 이후 커밋으로 재배포한 뒤,
+      `outputs-eta-fawn.vercel.app/prototype-bus/`가 404가 아니고 `/api/live?route=3330` 응답에 `id`가 없는지 본다
 - [ ] 실기기(모바일) 확인
 - [ ] **아침 통근 시간 실측 1회** — 배포본으로 범계역 케이스 재현, 예보와 실제 대조
-- [ ] 캐시 적중률·GBIS 호출 수 확인 (한도 대비)
+- [ ] 캐시 적중률·GBIS 호출 수 확인 (`npm run budget` 이론값 대비)
+- [ ] 응답자가 말한 정류장 서열(판교역 > 백현마을1단지 > 이매촌한신)이 수집 데이터에서 재현되는지 대조
 
 ---
 
