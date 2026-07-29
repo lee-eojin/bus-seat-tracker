@@ -21,7 +21,7 @@ font-size:15px;font-weight:800;color:var(--sub);text-align:center}
 .scr .direction-tabs{display:flex;gap:6px;margin-top:14px;padding:4px;border-radius:11px;background:var(--panel)}
 .scr .direction-tab{flex:1;border-radius:8px;padding:9px 6px;font-size:13.5px;font-weight:800;color:var(--sub);text-align:center}
 .scr .direction-tab.active{background:#fff;color:var(--ink);box-shadow:0 1px 6px rgba(28,35,48,.12)}
-.scr .reco{margin-top:14px;padding:14px 16px;border-radius:14px;background:var(--warn-soft)}
+.scr .ccl{margin-top:14px;padding:14px 16px;border-radius:14px;background:var(--warn-soft)}.scr .ccl-stop{margin:0;font-size:12px;font-weight:700;color:var(--sub)}.scr .ccl-headline{margin:5px 0 0;font-size:19px;font-weight:800;letter-spacing:-.02em;line-height:1.35}.scr .ccl-detail{margin:5px 0 0;font-size:13px;font-weight:600}.scr .ccl-why{margin:7px 0 0;font-size:12.5px;color:var(--sub);line-height:1.5}.scr .ccl-go{display:flex;align-items:center;justify-content:center;margin-top:11px;width:100%;min-height:42px;border-radius:11px;background:var(--ink);color:#fff;font-size:13.5px;font-weight:800}.scr .reco{margin-top:14px;padding:14px 16px;border-radius:14px;background:var(--warn-soft)}
 .scr .reco-title{font-size:12.5px;font-weight:800;color:var(--sub)}
 .scr .reco-body{margin:6px 0 0;font-size:14.5px;font-weight:700;line-height:1.55}
 .scr .axis{margin-top:12px;border:1px solid var(--line);border-radius:14px;overflow:hidden}
@@ -80,8 +80,12 @@ export function boardScreen({ reco = true } = {}) {
     <div class="direction-tabs">
       <div class="direction-tab active">판교 → 안양</div><div class="direction-tab">안양 → 판교</div>
     </div>
-    ${reco ? `<div class="reco"><p class="reco-title">추천</p>
-      <p class="reco-body">여기서는 어렵습니다. 백현마을1단지로 한 정류장 올라가면 탈 확률이 높아요.</p></div>` : ''}
+    ${reco ? `<div class="ccl">
+      <p class="ccl-stop">내 정류장 · 판교역.낙생육교.현대백화점</p>
+      <p class="ccl-headline">백현마을1단지로 가세요</p>
+      <p class="ccl-detail">그쪽은 빠듯 · 9석 예상 · 줄 16명 이상 (7분째)</p>
+      <p class="ccl-why">여기는 0석 예상 · 줄 43명 이상 (20분째)</p>
+      <div class="ccl-go">백현마을1단지 가는 길 보기</div></div>` : ''}
     <div class="axis">
       ${stop('이매촌한신.서현역.AK프라자', null, 'tint-ok', ['ok', '여유'], '38석 예상', '줄 3~8명')}
       ${stop('성남역.백현마을2단지', null, 'tint-warn', ['warn', '빠듯'], '12석 예상', '줄 9명 이상')}

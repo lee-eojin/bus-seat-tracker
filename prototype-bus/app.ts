@@ -272,10 +272,6 @@ function currentSeoulBucket(): { bucket: number; weekend: boolean } {
   };
 }
 
-function bucketLabel(bucket: number): string {
-  return `${String(Math.floor(bucket / 2)).padStart(2, '0')}:${bucket % 2 === 0 ? '00' : '30'}`;
-}
-
 function historyCell(routeName: string, sequence: number): HistoryBucket | null {
   const payload = readHistoryPayload(window.__HISTORY__);
   if (!payload) return null;
@@ -614,43 +610,171 @@ function renderRecordList(): void {
     }).join('\n');
 }
 
-function renderRecommendation(route: LatestRoute): void {
-  const card = getElement<HTMLDivElement>('recommendation');
-  card.replaceChildren();
+interface BoardFrame {
+  stops: DisplayStop[];
+  vehicles: DisplayVehicle[];
+  forecastsByVehicle: Map<DisplayVehicle, Map<number, SeatForecast>>;
+}
+
+// 결론 카드와 노선 축이 같은 예보를 봐야 한다. 따로 계산하면 위와 아래가 다른 말을 한다.
+function boardFrame(route: LatestRoute): BoardFrame {
+  const hasDirections = route.turnSequence !== null;
+  const stops = hasDirections ? route.stops.filter((stop) => stop.direction === selection.direction) : route.stops;
+  const routeVehicles = liveIsFresh(route) ? live.vehicles : route.vehicles;
+  const vehicles = hasDirections ? routeVehicles.filter((vehicle) => vehicle.direction === selection.direction) : routeVehicles;
+  const forecastsByVehicle = new Map<DisplayVehicle, Map<number, SeatForecast>>();
+  for (const vehicle of vehicles) forecastsByVehicle.set(vehicle, forecastVehicle(route, vehicle, stops));
+  return { stops, vehicles, forecastsByVehicle };
+}
+
+function forecastAt(frame: BoardFrame, sequence: number): SeatForecast | null {
+  const approaching = nextVehicleFor(sequence, frame.vehicles);
+  return approaching ? frame.forecastsByVehicle.get(approaching)?.get(sequence) ?? null : null;
+}
+
+// ── 결론 카드 ──
+// 첫 화면 맨 위에서 "그래서 뭘 하면 되는가"에 한 문장으로 답한다. 예전에는 노선 축을
+// 스크롤해 내 정류장을 직접 찾아야 했는데, 정류장에서 30초 안에 답이 나와야 하는 도구다.
+
+function stopShortName(name: string | null, sequence: number): string {
+  return (name ?? `정류장 ${sequence}`).split('.')[0] || `정류장 ${sequence}`;
+}
+
+const conclusionHeadlines: Record<BoardingVerdict, string> = {
+  roomy: '여기서 타면 됩니다',
+  tight: '여기서 타되, 줄 앞쪽에 서세요',
+  unlikely: '지금 여기서는 어렵습니다',
+};
+
+const conclusionTones: Record<BoardingVerdict, string> = { roomy: 'stay-ok', tight: 'stay-warn', unlikely: 'blocked' };
+
+/** 좌석 예상과 줄 추정을 한 줄로. 둘 다 없으면 null. */
+function conclusionDetail(route: LatestRoute, frame: BoardFrame, sequence: number): string | null {
+  const parts: string[] = [];
+  const forecast = forecastAt(frame, sequence);
+  if (forecast) parts.push(`${Math.round(forecast.arrivalMean)}석 예상`);
+  const stop = frame.stops.find((entry) => entry.sequence === sequence);
+  if (stop) {
+    const queue = queueAt(route, stop, frame.vehicles);
+    if (queue) parts.push(`${queueLabel(queue)} (${Math.round(queue.elapsedMinutes)}분째)`);
+  }
+  if (forecast?.lowConfidence) parts.push('표본 적음');
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+function renderConclusion(route: LatestRoute, frame: BoardFrame): void {
+  const card = getElement<HTMLElement>('conclusion');
+  // aria-live 영역이라 내용이 같은데 DOM만 갈아끼우면 스크린리더가 30초마다 다시 읽는다.
+  // 조각을 먼저 만들어 서명을 비교하고, 실제로 달라졌을 때만 교체한다.
+  const fragment = document.createDocumentFragment();
+  let tone = '';
+
+  const line = (className: string, text: string): void => {
+    const node = document.createElement('p');
+    node.className = className;
+    node.textContent = text;
+    fragment.append(node);
+  };
+
   const recommendation = recommendationFor(route);
-  card.className = `reco ${recommendation.kind}`;
-  const title = document.createElement('div');
-  title.className = 'reco-title';
-  title.textContent = `탑승 추천 · ${bucketLabel(currentSeoulBucket().bucket)} 시간대`;
-  const body = document.createElement('p');
-  body.className = 'reco-body';
-  body.textContent = recommendationText(recommendation);
-  card.append(title, body);
+  const dataReady = readProfilePayload(window.__PROFILE__) !== null && readHistoryPayload(window.__HISTORY__) !== null;
+
+  if (boardingStop) line('ccl-stop', `내 정류장 · ${boardingStop.name}`);
+
+  if (recommendation.kind === 'unset') {
+    line('ccl-headline', '내 정류장을 고르면 바로 답해드려요');
+    line('ccl-why', '아래 정류장 줄에서 길찾기를 누르고 "이 정류장에서 타요"를 선택하세요.');
+  } else if (!dataReady) {
+    // 프로파일이 오기 전의 예보는 수요를 0으로 보고 낙관한다. 틀린 판정을 띄우느니 잠깐 기다린다.
+    line('ccl-headline', '예보 계산 중…');
+    line('ccl-why', '노선 데이터를 받는 중이에요. 잠깐이면 됩니다.');
+  } else if (recommendation.kind === 'elsewhere') {
+    line('ccl-headline', '이 노선·방향에 내 정류장이 없어요');
+    line('ccl-why', '노선이나 방향을 바꾸거나, 아래에서 정류장을 다시 골라 주세요.');
+  } else if (recommendation.kind === 'insufficient') {
+    line('ccl-headline', '아직 판정할 표본이 부족해요');
+    const detail = boardingStop ? conclusionDetail(route, frame, boardingStop.sequence) : null;
+    if (detail) line('ccl-detail', detail);
+    line('ccl-why', recommendationText(recommendation));
+  } else if (recommendation.kind === 'stay') {
+    const forecast = boardingStop ? forecastAt(frame, boardingStop.sequence) : null;
+    if (forecast) {
+      tone = conclusionTones[forecast.verdict];
+      line('ccl-headline', conclusionHeadlines[forecast.verdict]);
+      const detail = boardingStop ? conclusionDetail(route, frame, boardingStop.sequence) : null;
+      if (detail) line('ccl-detail', detail);
+      // 평소에는 잘 타던 자리인데 지금 예보가 어렵다고 하는 경우만 근거를 덧붙인다
+      if (forecast.verdict === 'unlikely') line('ccl-why', `평소 이 시간대는 ${probabilityPhrase(recommendation.cell)}.`);
+    } else {
+      line('ccl-headline', '여기서 기다리세요');
+      line('ccl-why', `이 시간대 ${probabilityPhrase(recommendation.cell)}.`);
+    }
+  } else if (recommendation.kind === 'move') {
+    tone = 'move';
+    const targetName = stopShortName(recommendation.target.name, recommendation.target.sequence);
+    line('ccl-headline', `${targetName}로 가세요`);
+    const targetForecast = forecastAt(frame, recommendation.target.sequence);
+    const targetDetail = conclusionDetail(route, frame, recommendation.target.sequence);
+    if (targetForecast && targetDetail) {
+      line('ccl-detail', `그쪽은 ${verdictLabels[targetForecast.verdict]} · ${targetDetail}`);
+    } else {
+      line('ccl-detail', `그쪽 탑승 확률 ${percent(boardingProbability(recommendation.targetCell))}% (관측 ${recommendation.targetCell.samples}회)`);
+    }
+    const myDetail = boardingStop ? conclusionDetail(route, frame, boardingStop.sequence) : null;
+    line('ccl-why', myDetail ? `여기는 ${myDetail}` : `여기는 ${probabilityPhrase(recommendation.myCell)}`);
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'ccl-go';
+    go.textContent = `${targetName} 가는 길 보기`;
+    go.addEventListener('click', () => {
+      expandedStopSequence = recommendation.target.sequence;
+      requestRouteLocation();
+      render();
+      const row = document.getElementById(`stop-${recommendation.target.sequence}`);
+      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      row?.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' });
+    });
+    fragment.append(go);
+  } else {
+    tone = 'blocked';
+    line('ccl-headline', '지금은 옮겨도 어렵습니다');
+    const detail = boardingStop ? conclusionDetail(route, frame, boardingStop.sequence) : null;
+    if (detail) line('ccl-detail', detail);
+    line('ccl-why', recommendationText(recommendation));
+  }
 
   const actions = document.createElement('div');
-  actions.className = 'reco-actions';
+  actions.className = 'ccl-actions';
   if (boardingStop) {
-    const stopChip = document.createElement('button');
-    stopChip.type = 'button';
-    stopChip.className = 'reco-stop';
-    stopChip.textContent = `내 정류장 ${boardingStop.name} ✕`;
-    stopChip.addEventListener('click', () => {
+    const clearChip = document.createElement('button');
+    clearChip.type = 'button';
+    clearChip.className = 'ccl-chip';
+    clearChip.textContent = '내 정류장 해제';
+    clearChip.addEventListener('click', () => {
       boardingStop = null;
       localStorage.removeItem('bus-boarding-stop');
       render();
     });
-    actions.append(stopChip);
+    actions.append(clearChip);
   }
   const recordToggle = document.createElement('button');
   recordToggle.type = 'button';
-  recordToggle.className = 'reco-record-toggle';
+  recordToggle.className = 'ccl-chip';
   recordToggle.textContent = recordFormOpen ? '기록 닫기' : '오늘 아침 기록';
   recordToggle.addEventListener('click', () => {
     recordFormOpen = !recordFormOpen;
     render();
   });
   actions.append(recordToggle);
-  card.append(actions);
+  fragment.append(actions);
+
+  const nextClass = `conclusion show ${tone}`.trim();
+  const signature = `${nextClass}|${recordFormOpen}|${Array.from(fragment.childNodes, (node) => node.textContent ?? '').join('§')}`;
+  if (card.dataset.signature !== signature) {
+    card.dataset.signature = signature;
+    card.className = nextClass;
+    card.replaceChildren(fragment);
+  }
 
   getElement<HTMLDivElement>('record-section').classList.toggle('show', recordFormOpen);
   if (recordFormOpen) renderRecordList();
@@ -769,6 +893,12 @@ function queueAt(route: LatestRoute, stop: DisplayStop, vehicles: DisplayVehicle
   return estimateQueue(rate, elapsedMinutes, 0, source.lowerBound);
 }
 
+/** 해소를 확인했으면 범위로, 못 봤으면 점추정을 바닥 삼아 이상으로 말한다. */
+function queueLabel(queue: NonNullable<ReturnType<typeof estimateQueue>>): string {
+  const range = queueRange(queue);
+  return queue.lowerBound ? `줄 ${Math.round(queue.people)}명 이상` : `줄 ${range.low}~${range.high}명`;
+}
+
 function forecastVehicle(route: LatestRoute, vehicle: DisplayVehicle, stops: DisplayStop[]): Map<number, SeatForecast> {
   const forecasts = new Map<number, SeatForecast>();
   if (vehicle.stationSeq === null || vehicle.remainingSeats === null || vehicle.remainingSeats < 0) return forecasts;
@@ -822,13 +952,10 @@ function nextVehicleFor(stopSequence: number, vehicles: DisplayVehicle[]): Displ
     .sort((left, right) => (right.stationSeq ?? -1) - (left.stationSeq ?? -1))[0] ?? null;
 }
 
-function renderAxis(route: LatestRoute): void {
+function renderAxis(route: LatestRoute, frame: BoardFrame): void {
   const axis = getElement<HTMLDivElement>('axis');
   axis.replaceChildren();
-  const hasDirections = route.turnSequence !== null;
-  const stops = hasDirections ? route.stops.filter((stop) => stop.direction === selection.direction) : route.stops;
-  const routeVehicles = liveIsFresh(route) ? live.vehicles : route.vehicles;
-  const vehicles = hasDirections ? routeVehicles.filter((vehicle) => vehicle.direction === selection.direction) : routeVehicles;
+  const { stops, vehicles, forecastsByVehicle } = frame;
   if (vehicles.length === 0) {
     const note = document.createElement('div');
     note.className = 'empty-note';
@@ -836,11 +963,9 @@ function renderAxis(route: LatestRoute): void {
     axis.append(note);
   }
 
-  const forecastsByVehicle = new Map<DisplayVehicle, Map<number, SeatForecast>>();
-  for (const vehicle of vehicles) forecastsByVehicle.set(vehicle, forecastVehicle(route, vehicle, stops));
-
   stops.forEach((stop, index) => {
     const row = document.createElement('div');
+    row.id = `stop-${stop.sequence}`;
     row.className = 'stop-row';
     if (index === 0 || index === stops.length - 1) row.classList.add('terminal');
     const approaching = nextVehicleFor(stop.sequence, vehicles);
@@ -902,14 +1027,11 @@ function renderAxis(route: LatestRoute): void {
       // 좌석만으로는 탑승 여부가 안 갈린다. 내 앞에 몇 명 서 있는지가 함께 있어야 한다.
       const queue = queueAt(route, stop, vehicles);
       if (queue) {
-        const range = queueRange(queue);
         const waiting = document.createElement('span');
         waiting.className = 'seats waiting';
         // 해소를 확인한 경우만 범위로 말한다. 못 봤으면 폭 넓은 범위의 아래끝을 쓰면
         // 실제보다 한참 낮게 읽히므로 점추정을 바닥으로 삼아 이상으로 적는다.
-        waiting.textContent = queue.lowerBound
-          ? `줄 ${Math.round(queue.people)}명 이상`
-          : `줄 ${range.low}~${range.high}명`;
+        waiting.textContent = queueLabel(queue);
         const thin = document.createElement('span');
         thin.className = 'thin';
         thin.textContent = ` · ${Math.round(queue.elapsedMinutes)}분째`;
@@ -1020,11 +1142,12 @@ function render(): void {
   renderFreshness(state.route);
   renderRouteTabs(payload, state.route);
   renderDirectionTabs(state.route);
-  renderRecommendation(state.route);
+  const frame = boardFrame(state.route);
+  renderConclusion(state.route, frame);
   getElement<HTMLParagraphElement>('route-endpoints').textContent = state.route.route.startStationName && state.route.route.endStationName
     ? `${state.route.route.startStationName} ↔ ${state.route.route.endStationName}`
     : '';
-  renderAxis(state.route);
+  renderAxis(state.route, frame);
 }
 
 function reloadData(): void {
@@ -1106,8 +1229,21 @@ window.addEventListener('hashchange', () => {
   render();
 });
 
+// 프로파일 424KB와 히스토리 119KB가 첫 렌더를 막고 있었다. 노선 축과 실시간 좌석은
+// latest.js 27KB면 그리므로, 화면부터 띄우고 무거운 쪽은 뒤에 받아 다시 그린다.
+function loadDeferredData(): void {
+  for (const src of ['data/history.js', 'data/profile.js']) {
+    const tag = document.createElement('script');
+    tag.src = src;
+    tag.addEventListener('load', () => render());
+    tag.addEventListener('error', () => console.warn(`${src} 로딩 실패 — 예보 없이 표시합니다`));
+    document.head.append(tag);
+  }
+}
+
 readHash();
 render();
+loadDeferredData();
 loadLiveConfig();
 setInterval(reloadData, 60_000);
 // 라이브 폴링은 탭이 보일 때만 돈다 — 공유 API 키의 일일 쿼터 보호 (v2 §14.8)
