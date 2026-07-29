@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { boardScreen, entryScreen, screenCss, surveyScreen } from './screen.mjs';
 import { boardCss, jamBoard } from './board.mjs';
 import { mathCard, mathCss } from './math.mjs';
+import { plainCss, plainNumbers, plainOpen, plainShots } from './plain.mjs';
 
 const run = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -44,7 +45,7 @@ body{font-family:-apple-system,"Apple SD Gothic Neo","Pretendard","Noto Sans KR"
 .stat span{font-size:16px;color:#5b6472;font-weight:600}
 .foot{margin-top:auto;display:flex;align-items:center;justify-content:space-between;
 font-size:15px;font-weight:700;color:#8b93a3}
-${frameCss}${screenCss}${boardCss}${mathCss}`;
+${frameCss}${screenCss}${boardCss}${mathCss}${plainCss}`;
 
 const page = (w, h, body) => `<!doctype html><meta charset="utf-8"><style>
 ${baseCss}
@@ -202,6 +203,17 @@ cards.push({
 const MW = 1200, MH = 1200;
 cards.push({ name: '10-model', w: MW, h: MH,
   html: `<div class="card" style="width:${MW}px;height:${MH}px">${mathCard({ w: MW, h: MH })}</div>` });
+
+const PW = 1400, PH = 1050;
+cards.push(
+  { name: 'plain-01-screens', w: PW, h: PH, html: plainShots({ w: PW, h: PH, screens: [
+      [entryScreen(), 'QR로 들어오면 노선과 정류장이 채워진 상태'],
+      [boardScreen(), '도착 시점 좌석 예보와 대기 인원 추정'],
+      [surveyScreen(), '현장 설문 유도'],
+    ] }) },
+  { name: 'plain-02-numbers', w: PW, h: 900, html: plainNumbers({ w: PW, h: 900 }) },
+  { name: 'plain-03-open', w: PW, h: 700, html: plainOpen({ w: PW, h: 700 }) },
+);
 
 await mkdir(outDir, { recursive: true });
 for (const card of cards) {
