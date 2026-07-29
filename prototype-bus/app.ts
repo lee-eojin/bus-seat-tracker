@@ -716,6 +716,15 @@ function trackClearings(routeName: string, vehicles: DisplayVehicle[], sequence:
   }
 }
 
+// 하류 차량의 좌석은 해소의 증거가 못 된다. 판교역을 만석으로 떠난 버스도 몇 정류장 뒤엔
+// 하차로 자리가 난다. 그걸 해소로 읽으면 경과가 짧게 잡혀 줄을 과소추정한다. 2026-07-24
+// 18:57 실측 38명 구간에서 13~30명이 나온 원인이 이것이었다.
+// 그래서 해소로 인정하는 범위를 바로 다음 두 정류장으로 제한한다. 그 안에서는 하차가
+// 거의 없어 좌석이 곧 출발 잔여석이다.
+const clearingLookaheadStops = 2;
+// 하한을 잡을 때 되짚어 볼 범위. 이보다 먼 차량은 언제 해소했는지 알 수 없다.
+const lowerBoundWindowStops = 6;
+
 /** 첫 화면용. 하류 차량 위치에서 통과 시각을 되짚어 마지막 해소를 찾는다. */
 function inferredClearing(vehicles: DisplayVehicle[], sequence: number): { at: number; lowerBound: boolean } | null {
   const downstream = vehicles
@@ -723,11 +732,16 @@ function inferredClearing(vehicles: DisplayVehicle[], sequence: number): { at: n
     .sort((left, right) => (left.stationSeq ?? 0) - (right.stationSeq ?? 0));
   if (downstream.length === 0) return null;
   const elapsedOf = (vehicle: DisplayVehicle) => (((vehicle.stationSeq ?? 0) - sequence) * minutesPerStop) * 60_000;
-  const cleared = downstream.find((vehicle) => (vehicle.remainingSeats ?? 0) > 0);
+
+  const nearby = downstream.filter((vehicle) => (vehicle.stationSeq ?? 0) - sequence <= clearingLookaheadStops);
+  const cleared = nearby.find((vehicle) => (vehicle.remainingSeats ?? 0) > 0);
   if (cleared) return { at: Date.now() - elapsedOf(cleared), lowerBound: false };
-  // 보이는 하류 차량이 전부 만석이면 최소 그만큼은 쌓였다는 뜻이다.
-  const nearest = downstream[0];
-  return nearest ? { at: Date.now() - elapsedOf(nearest), lowerBound: true } : null;
+
+  // 가까이에서 해소를 못 봤다. 멀리 있는 차량은 언제 해소했는지 알 수 없으므로 판단 범위를
+  // 씌우고, 그 안에서 가장 먼 차량이 지나간 뒤로는 해소가 없었다고 본다. 실제 대기는 이보다 많다.
+  const inWindow = downstream.filter((vehicle) => (vehicle.stationSeq ?? 0) - sequence <= lowerBoundWindowStops);
+  const farthest = inWindow[inWindow.length - 1];
+  return farthest ? { at: Date.now() - elapsedOf(farthest), lowerBound: true } : null;
 }
 
 function queueAt(route: LatestRoute, stop: DisplayStop, vehicles: DisplayVehicle[]): ReturnType<typeof estimateQueue> {
@@ -886,8 +900,10 @@ function renderAxis(route: LatestRoute): void {
         const range = queueRange(queue);
         const waiting = document.createElement('span');
         waiting.className = 'seats waiting';
+        // 해소를 확인한 경우만 범위로 말한다. 못 봤으면 폭 넓은 범위의 아래끝을 쓰면
+        // 실제보다 한참 낮게 읽히므로 점추정을 바닥으로 삼아 이상으로 적는다.
         waiting.textContent = queue.lowerBound
-          ? `줄 ${range.low}명 이상`
+          ? `줄 ${Math.round(queue.people)}명 이상`
           : `줄 ${range.low}~${range.high}명`;
         const thin = document.createElement('span');
         thin.className = 'thin';
