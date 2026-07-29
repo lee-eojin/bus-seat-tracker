@@ -1,6 +1,13 @@
 <!doctype html>
 <html lang="ko">
 <head>
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-QFFRQ5Z4XX"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-QFFRQ5Z4XX');
+</script>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>이용 안내 · 빨간버스 좌석 현황</title>
@@ -61,20 +68,34 @@ li{margin-bottom:6px}
   </p>
 
   <h2>개인정보</h2>
-  <p><b>이 서비스는 개인정보를 서버에 수집·저장하지 않습니다.</b></p>
+  <p><b>회원가입이나 이름·연락처 입력 없이 이용할 수 있습니다.</b></p>
 
-  <p>브라우저에만 저장되는 항목이 있습니다. 서버로 전송되지 않으며 브라우저 저장소를 비우면 사라집니다.</p>
+  <p>브라우저에 저장되는 항목이 있습니다. 브라우저 저장소를 비우면 사라집니다.</p>
   <ul>
     <li>목적지와 승차 정류장 — 다음 방문 때 다시 입력하지 않도록</li>
     <li>탑승 기록 — 직접 입력하신 대기 인원·하차 인원·결과·메모</li>
     <li>관측 로그 — 화면이 본 좌석 수치의 기록</li>
+    <li>무작위 방문자 ID — 재방문 여부와 설문 응답을 연결하기 위해</li>
   </ul>
 
   <p><b>위치 정보</b>는 길찾기 링크를 만들 때만 브라우저에서 조회합니다.
     좌표는 네이버지도 주소에 담겨 브라우저에서 바로 열리며, <b>이 서비스의 서버로는 전송되지 않습니다.</b>
     위치 권한을 거부해도 좌석 현황은 그대로 동작합니다.</p>
 
-  <p><b>서버로 전송되는 것</b>은 실시간 좌석 조회 요청뿐이며, 담기는 값은 노선 번호(예: 3330)입니다.</p>
+  <p><b>서비스 서버로 전송되는 항목</b>은 실시간 좌석 조회에 필요한 노선 번호(예: 3330),
+    무작위 방문자 ID와 방문 시각, 설문에 직접 입력한 응답입니다. 방문 기록과 설문 응답은
+    재방문율 확인과 대기 인원 모델 개선을 위해 저장됩니다.</p>
+
+  <p><p><b>서비스 이용 분석</b>을 위해 Vercel Web Analytics를 사용합니다.
+    방문 페이지, 접속 시각, 유입 경로, 기기와 브라우저 종류, 국가 단위 지역이 집계됩니다.
+    쿠키를 쓰지 않고 사이트 간 추적을 하지 않으며, 개인을 식별하는 값은 남기지 않습니다.
+    이 정보는 화면과 기능을 개선하는 데만 사용됩니다.</p>
+
+  <p><b>Google Analytics 4</b>도 함께 사용합니다. Google은 쿠키 등을 통해 방문 페이지,
+    접속 시각, 유입 경로, 기기와 브라우저 정보, 대략적인 지역을 처리할 수 있습니다.
+    처리 내용은 Google의 정책을 따르며 자세한 내용은
+    <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google 개인정보처리방침</a>에서
+    확인할 수 있습니다. 브라우저에서 쿠키를 차단하거나 삭제하면 이 분석을 제한할 수 있습니다.</p>
 
   <p class="note">
     호스팅 사업자(Vercel)는 서비스 운영을 위한 접속 기록(IP 주소, 브라우저 종류, 요청 시각 등)을
@@ -87,7 +108,8 @@ li{margin-bottom:6px}
   <h2>문의</h2>
   <p>오류 제보나 문의는 저장소 이슈로 남겨 주세요.</p>
 
-  <p class="updated">최종 수정 2026-07-27</p>
+  <p class="updated">최종 수정 2026-07-29</p>
 </div>
+<script defer src="/_vercel/insights/script.js"></script>
 </body>
 </html>
