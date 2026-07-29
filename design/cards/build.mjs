@@ -4,6 +4,8 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { boardScreen, entryScreen, screenCss, surveyScreen } from './screen.mjs';
+import { boardCss, jamBoard } from './board.mjs';
+import { mathCard, mathCss } from './math.mjs';
 
 const run = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -42,7 +44,7 @@ body{font-family:-apple-system,"Apple SD Gothic Neo","Pretendard","Noto Sans KR"
 .stat span{font-size:16px;color:#5b6472;font-weight:600}
 .foot{margin-top:auto;display:flex;align-items:center;justify-content:space-between;
 font-size:15px;font-weight:700;color:#8b93a3}
-${frameCss}${screenCss}`;
+${frameCss}${screenCss}${boardCss}${mathCss}`;
 
 const page = (w, h, body) => `<!doctype html><meta charset="utf-8"><style>
 ${baseCss}
@@ -187,12 +189,26 @@ const cards = [
 ];
 
 
+const BW = 1600, BH = 1000;
+const screens = [entryScreen(), boardScreen(), surveyScreen()];
+let picked = 0;
+cards.push({
+  name: '09-board', w: BW, h: BH,
+  html: `<div class="card" style="width:${BW}px;height:${BH}px">${jamBoard({
+    phone: (w) => phone(screens[picked++ % screens.length], w),
+  })}</div>`,
+});
+
+const MW = 1200, MH = 1200;
+cards.push({ name: '10-model', w: MW, h: MH,
+  html: `<div class="card" style="width:${MW}px;height:${MH}px">${mathCard({ w: MW, h: MH })}</div>` });
+
 await mkdir(outDir, { recursive: true });
 for (const card of cards) {
   const file = path.join(outDir, `${card.name}.html`);
-  await writeFile(file, page(W, H, card.html));
+  await writeFile(file, page(card.w ?? W, card.h ?? H, card.html));
   await run(chrome, ['--headless', '--disable-gpu', '--hide-scrollbars',
     `--screenshot=${path.join(outDir, card.name + '.png')}`,
-    `--window-size=${W},${H}`, '--force-device-scale-factor=2', `file://${file}`]);
+    `--window-size=${card.w ?? W},${card.h ?? H}`, '--force-device-scale-factor=2', `file://${file}`]);
   console.log('생성', card.name + '.png');
 }
