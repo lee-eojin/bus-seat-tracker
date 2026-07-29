@@ -1,4 +1,5 @@
 import { boardingVerdict, expectedDemandAt, type BoardingVerdict } from '../shared/boarding.js';
+import { arrivalRateAt, estimateQueue, queueRange, queueWindowAt } from '../shared/queue.js';
 import { asList, isNonBoardingStop, isRecord, readHistoryPayload, readIdentifier, readLatestPayload, readNumber, readProfilePayload, type Direction, type DisplayStop, type DisplayVehicle, type HistoryBucket, type LatestPayload, type LatestRoute, type ProfileRoute, type SeatState } from '../shared/model.js';
 import { applyNetDemand, defaultSeatCapacity as seatCapacity, netDemandAt as sharedNetDemandAt, type NetDemandEstimate } from '../shared/profile.js';
 
@@ -247,6 +248,10 @@ async function refreshLiveVehicles(): Promise<void> {
       fetchedAt: Date.now(),
     };
     appendPhase0Observation(route, live.vehicles, readApiQueryTime(payload));
+    // 해소 추적은 폴링 때마다 해야 한다. 렌더 시점에는 이미 버스가 지나간 뒤다.
+    if (boardingStop && boardingStop.routeName === route.route.name) {
+      trackClearings(route.route.name, live.vehicles, boardingStop.sequence);
+    }
     render();
   } catch (error: unknown) {
     console.warn(`실시간 좌석 조회 실패, 스냅샷으로 표시합니다: ${error instanceof Error ? error.message : String(error)}`);
@@ -689,6 +694,62 @@ function bucketAtMinutesAhead(minutesAhead: number): { bucket: number; weekend: 
   };
 }
 
+// ── 대기 인원 추정 ──
+// 좌석을 남기고 떠난 버스가 큐 해소 사건이다. 그 시각 이후 흐른 시간에 도착률을 곱하면
+// 지금 줄이 나온다 (shared/queue.ts). 화면은 두 경로로 해소 시각을 잡는다.
+//   실시간  이 세션에서 버스가 내 정류장을 넘어가는 것을 직접 본 경우
+//   첫 화면 이미 하류에 있는 버스의 위치로 통과 시각을 되짚는 경우
+const lastClearingAt = new Map<string, number>();
+
+function clearingKey(routeName: string, sequence: number): string {
+  return `${routeName}|${sequence}`;
+}
+
+/** 라이브 갱신마다 부른다. 내 정류장을 지나간 버스 중 좌석을 남긴 것이 있으면 시각을 새로 찍는다. */
+function trackClearings(routeName: string, vehicles: DisplayVehicle[], sequence: number): void {
+  const key = clearingKey(routeName, sequence);
+  for (const vehicle of vehicles) {
+    if (vehicle.stationSeq === null || vehicle.remainingSeats === null) continue;
+    // 막 지나간 차량만 본다. 멀리 간 차량은 통과 시각을 알 수 없다.
+    if (vehicle.stationSeq !== sequence + 1) continue;
+    if (vehicle.remainingSeats > 0) lastClearingAt.set(key, Date.now());
+  }
+}
+
+/** 첫 화면용. 하류 차량 위치에서 통과 시각을 되짚어 마지막 해소를 찾는다. */
+function inferredClearing(vehicles: DisplayVehicle[], sequence: number): { at: number; lowerBound: boolean } | null {
+  const downstream = vehicles
+    .filter((vehicle) => vehicle.stationSeq !== null && vehicle.stationSeq > sequence)
+    .sort((left, right) => (left.stationSeq ?? 0) - (right.stationSeq ?? 0));
+  if (downstream.length === 0) return null;
+  const elapsedOf = (vehicle: DisplayVehicle) => (((vehicle.stationSeq ?? 0) - sequence) * minutesPerStop) * 60_000;
+  const cleared = downstream.find((vehicle) => (vehicle.remainingSeats ?? 0) > 0);
+  if (cleared) return { at: Date.now() - elapsedOf(cleared), lowerBound: false };
+  // 보이는 하류 차량이 전부 만석이면 최소 그만큼은 쌓였다는 뜻이다.
+  const nearest = downstream[0];
+  return nearest ? { at: Date.now() - elapsedOf(nearest), lowerBound: true } : null;
+}
+
+function queueAt(route: LatestRoute, stop: DisplayStop, vehicles: DisplayVehicle[]): ReturnType<typeof estimateQueue> {
+  const seoul = new Date(Date.now() + 9 * 3600 * 1000);
+  const window = queueWindowAt(seoul.getUTCHours() * 60 + seoul.getUTCMinutes());
+  if (!window) return null;
+  const rate = arrivalRateAt(route.route.name, stop.sequence, window);
+  if (rate === null) return null;
+
+  const tracked = lastClearingAt.get(clearingKey(route.route.name, stop.sequence));
+  const inferred = inferredClearing(vehicles, stop.sequence);
+  const source = tracked !== undefined && (!inferred || tracked > inferred.at)
+    ? { at: tracked, lowerBound: false }
+    : inferred;
+  if (!source) return null;
+
+  const elapsedMinutes = (Date.now() - source.at) / 60_000;
+  // 해소가 아주 오래전이면 그 사이 관측 공백이 커서 곱셈이 발산한다. 한 시간에서 끊는다.
+  if (elapsedMinutes > 60) return null;
+  return estimateQueue(rate, elapsedMinutes, 0, source.lowerBound);
+}
+
 function forecastVehicle(route: LatestRoute, vehicle: DisplayVehicle, stops: DisplayStop[]): Map<number, SeatForecast> {
   const forecasts = new Map<number, SeatForecast>();
   if (vehicle.stationSeq === null || vehicle.remainingSeats === null || vehicle.remainingSeats < 0) return forecasts;
@@ -818,6 +879,23 @@ function renderAxis(route: LatestRoute): void {
       }
 
       verdictBox.append(badge, seats);
+
+      // 좌석만으로는 탑승 여부가 안 갈린다. 내 앞에 몇 명 서 있는지가 함께 있어야 한다.
+      const queue = queueAt(route, stop, vehicles);
+      if (queue) {
+        const range = queueRange(queue);
+        const waiting = document.createElement('span');
+        waiting.className = 'seats waiting';
+        waiting.textContent = queue.lowerBound
+          ? `줄 ${range.low}명 이상`
+          : `줄 ${range.low}~${range.high}명`;
+        const thin = document.createElement('span');
+        thin.className = 'thin';
+        thin.textContent = ` · ${Math.round(queue.elapsedMinutes)}분째`;
+        waiting.append(thin);
+        verdictBox.append(waiting);
+      }
+
       row.append(verdictBox);
     } else {
       const probabilityCell = historyCell(route.route.name, stop.sequence);
