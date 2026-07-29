@@ -723,7 +723,12 @@ function trackClearings(routeName: string, vehicles: DisplayVehicle[], sequence:
 // 거의 없어 좌석이 곧 출발 잔여석이다.
 const clearingLookaheadStops = 2;
 // 하한을 잡을 때 되짚어 볼 범위. 이보다 먼 차량은 언제 해소했는지 알 수 없다.
-const lowerBoundWindowStops = 6;
+//
+// 6정류장(12분)으로 뒀더니 판교역 저녁이 구조적으로 낮게 나왔다. 이 정류장은 해소가
+// 드물어 실제 마지막 해소가 12분보다 훨씬 전인 경우가 많은데 거기서 끊겼기 때문이다.
+// 2026-07-24 18:57 현장 계수 38명 구간으로 맞춰 보면 6은 22명, 8~10은 43명,
+// 12 이상은 65명이 나온다. 실측에 가장 가까운 10을 쓴다.
+const lowerBoundWindowStops = 10;
 
 /** 첫 화면용. 하류 차량 위치에서 통과 시각을 되짚어 마지막 해소를 찾는다. */
 function inferredClearing(vehicles: DisplayVehicle[], sequence: number): { at: number; lowerBound: boolean } | null {
