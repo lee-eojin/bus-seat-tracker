@@ -623,7 +623,11 @@ function boardFrame(route: LatestRoute): BoardFrame {
   const routeVehicles = liveIsFresh(route) ? live.vehicles : route.vehicles;
   const vehicles = hasDirections ? routeVehicles.filter((vehicle) => vehicle.direction === selection.direction) : routeVehicles;
   const forecastsByVehicle = new Map<DisplayVehicle, Map<number, SeatForecast>>();
-  for (const vehicle of vehicles) forecastsByVehicle.set(vehicle, forecastVehicle(route, vehicle, stops));
+  // 프로파일이 오기 전의 예보는 수요를 0으로 보고 전부 여유로 판정한다. 그 낙관을 화면에
+  // 내보내느니 예보 없이 실측 잔여석 색으로 두는 쪽이 정직하다. 카드도 같은 이유로 기다린다.
+  if (readProfilePayload(window.__PROFILE__) !== null) {
+    for (const vehicle of vehicles) forecastsByVehicle.set(vehicle, forecastVehicle(route, vehicle, stops));
+  }
   return { stops, vehicles, forecastsByVehicle };
 }
 
@@ -637,7 +641,18 @@ function forecastAt(frame: BoardFrame, sequence: number): SeatForecast | null {
 // 스크롤해 내 정류장을 직접 찾아야 했는데, 정류장에서 30초 안에 답이 나와야 하는 도구다.
 
 function stopShortName(name: string | null, sequence: number): string {
-  return (name ?? `정류장 ${sequence}`).split('.')[0] || `정류장 ${sequence}`;
+  if (!name) return `정류장 ${sequence}`;
+  // "롯데백화점.범계역"에서 앞 조각만 자르면 백화점 광고처럼 읽힌다. 길 안내에는 역 이름이 세다.
+  const segments = name.split('.');
+  return segments.find((segment) => segment.includes('역')) ?? segments[0] ?? name;
+}
+
+/** "판교역으로/백현마을1단지로" — 받침 유무에 따른 방향 조사. ㄹ받침은 '로'를 쓴다. */
+function directionJosa(name: string): string {
+  const code = name.charCodeAt(name.length - 1);
+  if (code < 0xac00 || code > 0xd7a3) return '로';
+  const final = (code - 0xac00) % 28;
+  return final === 0 || final === 8 ? '로' : '으로';
 }
 
 const conclusionHeadlines: Record<BoardingVerdict, string> = {
@@ -664,117 +679,113 @@ function conclusionDetail(route: LatestRoute, frame: BoardFrame, sequence: numbe
 
 function renderConclusion(route: LatestRoute, frame: BoardFrame): void {
   const card = getElement<HTMLElement>('conclusion');
-  // aria-live 영역이라 내용이 같은데 DOM만 갈아끼우면 스크린리더가 30초마다 다시 읽는다.
-  // 조각을 먼저 만들어 서명을 비교하고, 실제로 달라졌을 때만 교체한다.
-  const fragment = document.createDocumentFragment();
-  let tone = '';
+  const stopLine = getElement<HTMLParagraphElement>('conclusion-stop');
+  const headline = getElement<HTMLParagraphElement>('conclusion-headline');
+  const info = getElement<HTMLDivElement>('conclusion-info');
+  const go = getElement<HTMLButtonElement>('conclusion-go');
 
-  const line = (className: string, text: string): void => {
-    const node = document.createElement('p');
-    node.className = className;
-    node.textContent = text;
-    fragment.append(node);
-  };
+  let tone = '';
+  let headlineText = '';
+  const infoLines: Array<[string, string]> = [];
+  let goTarget: DisplayStop | null = null;
 
   const recommendation = recommendationFor(route);
   const dataReady = readProfilePayload(window.__PROFILE__) !== null && readHistoryPayload(window.__HISTORY__) !== null;
-
-  if (boardingStop) line('ccl-stop', `내 정류장 · ${boardingStop.name}`);
+  const myForecast = boardingStop ? forecastAt(frame, boardingStop.sequence) : null;
+  const myDetail = boardingStop ? conclusionDetail(route, frame, boardingStop.sequence) : null;
 
   if (recommendation.kind === 'unset') {
-    line('ccl-headline', '내 정류장을 고르면 바로 답해드려요');
-    line('ccl-why', '아래 정류장 줄에서 길찾기를 누르고 "이 정류장에서 타요"를 선택하세요.');
-  } else if (!dataReady) {
+    headlineText = '내 정류장을 고르면 바로 답해드려요';
+    infoLines.push(['ccl-why', '아래 정류장 줄에서 길찾기를 누르고 "이 정류장에서 타요"를 선택하세요.']);
+  } else if (!dataReady && deferredDataPending > 0) {
     // 프로파일이 오기 전의 예보는 수요를 0으로 보고 낙관한다. 틀린 판정을 띄우느니 잠깐 기다린다.
-    line('ccl-headline', '예보 계산 중…');
-    line('ccl-why', '노선 데이터를 받는 중이에요. 잠깐이면 됩니다.');
+    headlineText = '예보 계산 중…';
+    infoLines.push(['ccl-why', '노선 데이터를 받는 중이에요. 잠깐이면 됩니다.']);
+  } else if (!dataReady) {
+    // 지연 로딩이 실패한 채 끝났다. 무한 "계산 중"보다 실패를 말하는 쪽이 낫다.
+    headlineText = '노선 데이터를 못 받았어요';
+    infoLines.push(['ccl-why', '연결을 확인하고 새로고침해 주세요. 실시간 좌석은 아래에서 그대로 볼 수 있어요.']);
   } else if (recommendation.kind === 'elsewhere') {
-    line('ccl-headline', '이 노선·방향에 내 정류장이 없어요');
-    line('ccl-why', '노선이나 방향을 바꾸거나, 아래에서 정류장을 다시 골라 주세요.');
+    headlineText = '이 노선·방향에 내 정류장이 없어요';
+    infoLines.push(['ccl-why', '노선이나 방향을 바꾸거나, 아래에서 정류장을 다시 골라 주세요.']);
   } else if (recommendation.kind === 'insufficient') {
-    line('ccl-headline', '아직 판정할 표본이 부족해요');
-    const detail = boardingStop ? conclusionDetail(route, frame, boardingStop.sequence) : null;
-    if (detail) line('ccl-detail', detail);
-    line('ccl-why', recommendationText(recommendation));
+    headlineText = '아직 판정할 표본이 부족해요';
+    if (myDetail) infoLines.push(['ccl-detail', myDetail]);
+    infoLines.push(['ccl-why', recommendationText(recommendation)]);
   } else if (recommendation.kind === 'stay') {
-    const forecast = boardingStop ? forecastAt(frame, boardingStop.sequence) : null;
-    if (forecast) {
-      tone = conclusionTones[forecast.verdict];
-      line('ccl-headline', conclusionHeadlines[forecast.verdict]);
-      const detail = boardingStop ? conclusionDetail(route, frame, boardingStop.sequence) : null;
-      if (detail) line('ccl-detail', detail);
+    if (myForecast) {
+      tone = conclusionTones[myForecast.verdict];
+      headlineText = conclusionHeadlines[myForecast.verdict];
+      if (myDetail) infoLines.push(['ccl-detail', myDetail]);
       // 평소에는 잘 타던 자리인데 지금 예보가 어렵다고 하는 경우만 근거를 덧붙인다
-      if (forecast.verdict === 'unlikely') line('ccl-why', `평소 이 시간대는 ${probabilityPhrase(recommendation.cell)}.`);
+      if (myForecast.verdict === 'unlikely') infoLines.push(['ccl-why', `평소 이 시간대는 ${probabilityPhrase(recommendation.cell)}.`]);
     } else {
-      line('ccl-headline', '여기서 기다리세요');
-      line('ccl-why', `이 시간대 ${probabilityPhrase(recommendation.cell)}.`);
+      headlineText = '여기서 기다리세요';
+      infoLines.push(['ccl-why', `이 시간대 ${probabilityPhrase(recommendation.cell)}.`]);
+    }
+  } else if (myForecast && myForecast.verdict !== 'unlikely') {
+    // 히스토리는 옮기라는데 지금 오는 버스의 예보는 탈 만하다. "가세요"와 "여유"가 한 화면에
+    // 같이 뜨면 어느 쪽도 못 믿는다. 지금이 헤드라인을 갖고, 평소는 근거 줄로 내려간다.
+    tone = conclusionTones[myForecast.verdict];
+    headlineText = myForecast.verdict === 'roomy' ? '지금 오는 버스는 여유예요' : '지금 버스는 빠듯해요, 줄 앞쪽에 서세요';
+    if (myDetail) infoLines.push(['ccl-detail', myDetail]);
+    if (recommendation.kind === 'move') {
+      const targetName = stopShortName(recommendation.target.name, recommendation.target.sequence);
+      infoLines.push(['ccl-why', `평소 이 시간대엔 자주 만석이에요. 어려워지면 ${targetName}${directionJosa(targetName)} 올라가는 게 안전합니다.`]);
+    } else {
+      infoLines.push(['ccl-why', `평소 이 시간대 ${probabilityPhrase(recommendation.cell)}.`]);
     }
   } else if (recommendation.kind === 'move') {
     tone = 'move';
     const targetName = stopShortName(recommendation.target.name, recommendation.target.sequence);
-    line('ccl-headline', `${targetName}로 가세요`);
+    headlineText = `${targetName}${directionJosa(targetName)} 가세요`;
     const targetForecast = forecastAt(frame, recommendation.target.sequence);
     const targetDetail = conclusionDetail(route, frame, recommendation.target.sequence);
     if (targetForecast && targetDetail) {
-      line('ccl-detail', `그쪽은 ${verdictLabels[targetForecast.verdict]} · ${targetDetail}`);
+      infoLines.push(['ccl-detail', `그쪽은 ${verdictLabels[targetForecast.verdict]} · ${targetDetail}`]);
     } else {
-      line('ccl-detail', `그쪽 탑승 확률 ${percent(boardingProbability(recommendation.targetCell))}% (관측 ${recommendation.targetCell.samples}회)`);
+      infoLines.push(['ccl-detail', `그쪽 탑승 확률 ${percent(boardingProbability(recommendation.targetCell))}% (관측 ${recommendation.targetCell.samples}회)`]);
     }
-    const myDetail = boardingStop ? conclusionDetail(route, frame, boardingStop.sequence) : null;
-    line('ccl-why', myDetail ? `여기는 ${myDetail}` : `여기는 ${probabilityPhrase(recommendation.myCell)}`);
-    const go = document.createElement('button');
-    go.type = 'button';
-    go.className = 'ccl-go';
-    go.textContent = `${targetName} 가는 길 보기`;
-    go.addEventListener('click', () => {
-      expandedStopSequence = recommendation.target.sequence;
-      requestRouteLocation();
-      render();
-      const row = document.getElementById(`stop-${recommendation.target.sequence}`);
-      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      row?.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' });
-    });
-    fragment.append(go);
+    infoLines.push(['ccl-why', myDetail ? `여기는 ${myDetail}` : `여기는 ${probabilityPhrase(recommendation.myCell)}`]);
+    goTarget = recommendation.target;
   } else {
     tone = 'blocked';
-    line('ccl-headline', '지금은 옮겨도 어렵습니다');
-    const detail = boardingStop ? conclusionDetail(route, frame, boardingStop.sequence) : null;
-    if (detail) line('ccl-detail', detail);
-    line('ccl-why', recommendationText(recommendation));
+    headlineText = '지금은 옮겨도 어렵습니다';
+    if (myDetail) infoLines.push(['ccl-detail', myDetail]);
+    infoLines.push(['ccl-why', recommendationText(recommendation)]);
   }
 
-  const actions = document.createElement('div');
-  actions.className = 'ccl-actions';
+  // ── 골격 갱신. 라이브 영역은 헤드라인뿐이라 판정이 바뀔 때만 낭독되고,
+  //    버튼은 상주 요소라 재렌더에 포커스를 잃지 않는다 ──
   if (boardingStop) {
-    const clearChip = document.createElement('button');
-    clearChip.type = 'button';
-    clearChip.className = 'ccl-chip';
-    clearChip.textContent = '내 정류장 해제';
-    clearChip.addEventListener('click', () => {
-      boardingStop = null;
-      localStorage.removeItem('bus-boarding-stop');
-      render();
-    });
-    actions.append(clearChip);
+    stopLine.hidden = false;
+    const text = `내 정류장 · ${boardingStop.name}`;
+    if (stopLine.textContent !== text) stopLine.textContent = text;
+  } else {
+    stopLine.hidden = true;
   }
-  const recordToggle = document.createElement('button');
-  recordToggle.type = 'button';
-  recordToggle.className = 'ccl-chip';
-  recordToggle.textContent = recordFormOpen ? '기록 닫기' : '오늘 아침 기록';
-  recordToggle.addEventListener('click', () => {
-    recordFormOpen = !recordFormOpen;
-    render();
-  });
-  actions.append(recordToggle);
-  fragment.append(actions);
-
+  if (headline.textContent !== headlineText) headline.textContent = headlineText;
+  info.replaceChildren(...infoLines.map(([className, text]) => {
+    const node = document.createElement('p');
+    node.className = className;
+    node.textContent = text;
+    return node;
+  }));
+  if (goTarget) {
+    go.hidden = false;
+    go.dataset.sequence = String(goTarget.sequence);
+    const label = `${stopShortName(goTarget.name, goTarget.sequence)} 가는 길 보기`;
+    if (go.textContent !== label) go.textContent = label;
+  } else {
+    go.hidden = true;
+    delete go.dataset.sequence;
+  }
+  getElement<HTMLButtonElement>('conclusion-clear').hidden = !boardingStop;
+  const recordChip = getElement<HTMLButtonElement>('conclusion-record');
+  const recordLabel = recordFormOpen ? '기록 닫기' : '오늘 아침 기록';
+  if (recordChip.textContent !== recordLabel) recordChip.textContent = recordLabel;
   const nextClass = `conclusion show ${tone}`.trim();
-  const signature = `${nextClass}|${recordFormOpen}|${Array.from(fragment.childNodes, (node) => node.textContent ?? '').join('§')}`;
-  if (card.dataset.signature !== signature) {
-    card.dataset.signature = signature;
-    card.className = nextClass;
-    card.replaceChildren(fragment);
-  }
+  if (card.className !== nextClass) card.className = nextClass;
 
   getElement<HTMLDivElement>('record-section').classList.toggle('show', recordFormOpen);
   if (recordFormOpen) renderRecordList();
@@ -1194,6 +1205,28 @@ getElement<HTMLButtonElement>('phase0-export').addEventListener('click', () => {
   URL.revokeObjectURL(link.href);
 });
 
+getElement<HTMLButtonElement>('conclusion-clear').addEventListener('click', () => {
+  boardingStop = null;
+  localStorage.removeItem('bus-boarding-stop');
+  render();
+});
+
+getElement<HTMLButtonElement>('conclusion-record').addEventListener('click', () => {
+  recordFormOpen = !recordFormOpen;
+  render();
+});
+
+getElement<HTMLButtonElement>('conclusion-go').addEventListener('click', () => {
+  const sequence = Number(getElement<HTMLButtonElement>('conclusion-go').dataset.sequence);
+  if (!Number.isFinite(sequence)) return;
+  expandedStopSequence = sequence;
+  requestRouteLocation();
+  render();
+  const row = document.getElementById(`stop-${sequence}`);
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  row?.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' });
+});
+
 getElement<HTMLFormElement>('record-form').addEventListener('submit', (event) => {
   event.preventDefault();
   const state = boardState();
@@ -1229,14 +1262,24 @@ window.addEventListener('hashchange', () => {
   render();
 });
 
-// 프로파일 424KB와 히스토리 119KB가 첫 렌더를 막고 있었다. 노선 축과 실시간 좌석은
-// latest.js 27KB면 그리므로, 화면부터 띄우고 무거운 쪽은 뒤에 받아 다시 그린다.
+// 프로파일과 히스토리(합쳐 수백 KB, 날마다 다름)가 첫 렌더를 막고 있었다. 노선 축과
+// 실시간 좌석은 latest.js 27KB면 그리므로, 화면부터 띄우고 무거운 쪽은 뒤에 받아 다시 그린다.
+// 실패도 렌더를 다시 불러 정착시킨다. 안 그러면 결론 카드가 "계산 중"에 영영 갇힌다.
+let deferredDataPending = 2;
+
 function loadDeferredData(): void {
   for (const src of ['data/history.js', 'data/profile.js']) {
     const tag = document.createElement('script');
     tag.src = src;
-    tag.addEventListener('load', () => render());
-    tag.addEventListener('error', () => console.warn(`${src} 로딩 실패 — 예보 없이 표시합니다`));
+    tag.addEventListener('load', () => {
+      deferredDataPending -= 1;
+      render();
+    });
+    tag.addEventListener('error', () => {
+      deferredDataPending -= 1;
+      console.warn(`${src} 로딩 실패 — 예보 없이 표시합니다`);
+      render();
+    });
     document.head.append(tag);
   }
 }
