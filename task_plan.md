@@ -203,14 +203,14 @@ shared/            그대로 — 서버·클라이언트 공용
 - 설득 논리는 비전이 아니라 증거다. 배포된 서비스, 실사용자 51명, 대면 설문 15명,
   검증된 모델(MAE 4.34)이 다른 모집글과 갈리는 지점이다
 
-- [x] 소개 카드 10종 생성 (`design/cards/`)
+- [x] 소개 카드 13종 생성 (`design/cards/`). 마케팅 10종과 담백한 3종
 - [ ] 노션 모집 글 작성 (사용자 직접)
 - [ ] 지원 폼 준비
 - [ ] 배포 채널 정하기
 
 ### 카드 생성기
 
-`node design/cards/build.mjs` 하나로 10장을 다시 뽑는다. 화면 목업은
+`node design/cards/build.mjs` 하나로 13장을 다시 뽑는다. 화면 목업은
 `design/cards/screen.mjs`가 실제 `prototype-bus` 클래스를 그대로 옮겨 쓴다.
 목업이 실물과 다르면 합류한 사람이 첫날 실망하므로 값도 실제 관측에 맞췄다.
 산출물은 `design/cards/out/`이고 gitignore 대상이다.
