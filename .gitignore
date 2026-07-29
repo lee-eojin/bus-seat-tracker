@@ -8,3 +8,8 @@ field-observations.jsonl
 site/
 .vercel
 .claude/settings.local.json
+
+# Neon 통합이 설치한 에이전트 스킬 (배포와 무관)
+.agents/
+.claude/skills/
+skills-lock.json

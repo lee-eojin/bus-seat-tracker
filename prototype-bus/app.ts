@@ -1,3 +1,4 @@
+import { Analytics } from "@vercel/analytics/next"
 import { boardingVerdict, expectedDemandAt, type BoardingVerdict } from '../shared/boarding.js';
 import { asList, isNonBoardingStop, isRecord, readHistoryPayload, readIdentifier, readLatestPayload, readNumber, readProfilePayload, type Direction, type DisplayStop, type DisplayVehicle, type HistoryBucket, type LatestPayload, type LatestRoute, type ProfileRoute, type SeatState } from '../shared/model.js';
 import { applyNetDemand, defaultSeatCapacity as seatCapacity, netDemandAt as sharedNetDemandAt, type NetDemandEstimate } from '../shared/profile.js';
@@ -1022,3 +1023,129 @@ setInterval(() => {
   const state = boardState();
   if (state.kind === 'ready') renderFreshness(state.route);
 }, 30_000);
+
+// ── QR 진입 (판교역 배포용) ──
+// 정류장에서 카드를 받은 사람은 이미 그 정류장에 서 있다. 노선과 방향과 내 정류장을
+// 고르게 하면 거기서 이탈한다. `?at=`으로 그 셋을 미리 채우고 도착지만 묻는다.
+interface EntryPreset {
+  routeName: string;
+  sequence: number;
+  stopName: string;
+  direction: Direction;
+  headline: string;
+  lead: string;
+  note: string;
+}
+
+const entryPresets: Record<string, EntryPreset> = {
+  pangyo: {
+    routeName: '3330',
+    sequence: 22,
+    stopName: '판교역.낙생육교.현대백화점',
+    direction: 'up',
+    headline: '판교역에서 기다리는 게 최선일까요?',
+    lead: '이 정류장은 저녁에 3330 열 대 중 넷이 좌석을 다 채우고 지나갑니다. 도착지를 알려주시면 어디서 타는 게 나은지 보여드려요.',
+    note: '수집한 관측 기준으로 저녁 판교역은 만석 통과 41퍼센트입니다. 백현마을1단지는 35퍼센트, 이매촌한신은 4퍼센트예요.',
+  },
+};
+
+function applyEntryPreset(): EntryPreset | null {
+  const key = new URLSearchParams(location.search).get('at');
+  const preset = key ? entryPresets[key] : undefined;
+  if (!preset) return null;
+
+  selection = { routeName: preset.routeName, direction: preset.direction };
+  boardingStop = {
+    routeName: preset.routeName,
+    direction: preset.direction,
+    sequence: preset.sequence,
+    name: preset.stopName,
+  };
+  localStorage.setItem('bus-boarding-stop', JSON.stringify(boardingStop));
+
+  getElement<HTMLElement>('destination-headline').textContent = preset.headline;
+  getElement<HTMLParagraphElement>('destination-lead').textContent = preset.lead;
+  const note = getElement<HTMLDivElement>('entry-note');
+  note.textContent = preset.note;
+  note.classList.add('show');
+  return preset;
+}
+
+const entryPreset = applyEntryPreset();
+
+// ── 익명 방문 계측 ──
+// 통근 도구의 결정적 지표는 재방문율이다. 한 번 열고 마는 것은 구경이고 사흘 뒤에도
+// 여는 것이 도구다 (docs/proposal.md 7.2). 남기는 것은 무작위 ID와 방문 시각뿐이고
+// 개인을 식별할 값은 보내지 않는다.
+const visitorKey = 'bus-visitor-id';
+
+function visitorId(): string {
+  let id = localStorage.getItem(visitorKey);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(visitorKey, id);
+  }
+  return id;
+}
+
+function recordVisit(): void {
+  void fetch('/api/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      kind: 'visit',
+      visitorId: visitorId(),
+      entry: new URLSearchParams(location.search).get('at'),
+    }),
+  }).catch(() => { /* 계측 실패가 화면을 막지 않는다 */ });
+}
+
+recordVisit();
+
+// ── 현장 설문 ──
+// 관측은 버스 쪽에서 세었지 사람 쪽에서 세지 않았다. 한 사람이 얼마나 자주 보내는지는
+// 여기서만 나온다 (docs/proposal.md 6.7).
+const surveySubmittedKey = 'bus-survey-submitted';
+
+function showSurvey(): void {
+  getElement<HTMLElement>('survey').classList.add('show');
+  getElement<HTMLButtonElement>('survey-toggle').style.display = 'none';
+}
+
+getElement<HTMLButtonElement>('survey-toggle').addEventListener('click', showSurvey);
+if (entryPreset && !localStorage.getItem(surveySubmittedKey)) showSurvey();
+
+getElement<HTMLFormElement>('survey-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const submit = getElement<HTMLButtonElement>('survey-submit');
+  const status = getElement<HTMLParagraphElement>('survey-status');
+  submit.disabled = true;
+  status.textContent = '보내는 중...';
+
+  const payload = {
+    kind: 'survey',
+    visitorId: visitorId(),
+    entry: new URLSearchParams(location.search).get('at'),
+    stopName: boardingStop?.name ?? null,
+    routeName: selection.routeName,
+    destination,
+    frequency: getElement<HTMLSelectElement>('survey-frequency').value,
+    passedBuses: getElement<HTMLSelectElement>('survey-passed').value,
+    walkedUpstream: getElement<HTMLSelectElement>('survey-walked').value,
+    note: getElement<HTMLTextAreaElement>('survey-note').value.trim() || null,
+  };
+
+  void fetch('/api/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then((response) => {
+    if (!response.ok) throw new Error(String(response.status));
+    localStorage.setItem(surveySubmittedKey, new Date().toISOString());
+    getElement<HTMLFormElement>('survey-form').style.display = 'none';
+    status.textContent = '고맙습니다. 이 답이 대기 인원 모델에 바로 들어갑니다.';
+  }).catch(() => {
+    submit.disabled = false;
+    status.textContent = '전송에 실패했어요. 잠시 뒤 다시 눌러주세요.';
+  });
+});
