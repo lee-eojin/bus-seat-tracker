@@ -1164,7 +1164,7 @@ function applyEntryPreset(): EntryPreset | null {
   return preset;
 }
 
-const entryPreset = applyEntryPreset();
+applyEntryPreset();
 
 // ── 익명 방문 계측 ──
 // 통근 도구의 결정적 지표는 재방문율이다. 한 번 열고 마는 것은 구경이고 사흘 뒤에도
@@ -1206,7 +1206,8 @@ function showSurvey(): void {
 }
 
 getElement<HTMLButtonElement>('survey-toggle').addEventListener('click', showSurvey);
-if (entryPreset && !localStorage.getItem(surveySubmittedKey)) showSurvey();
+// QR 진입 시에는 구글폼 배너로 안내하므로 앱 안 설문을 자동으로 펼치지 않는다.
+// 같은 것을 두 번 물으면 어느 쪽도 끝까지 답하지 않는다.
 
 getElement<HTMLFormElement>('survey-form').addEventListener('submit', (event) => {
   event.preventDefault();
