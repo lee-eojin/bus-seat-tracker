@@ -90,7 +90,9 @@ jobs:
           DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
         run: |
           if [ -z "$DEPLOY_HOOK_URL" ]; then
-            echo 'Vercel 배포 훅 미설정 — 건너뜁니다'
+            # 건너뛰어도 잡은 초록으로 끝나므로, 갱신이 멈춘 걸 아무도 모른 채 며칠이 간다.
+            # 2026-07-29에 배포본 데이터가 13.6시간 낡은 채로 있었다 (DEPLOY.md §4).
+            echo "::warning::VERCEL_DEPLOY_HOOK_URL 미설정. 배포본 데이터가 갱신되지 않습니다 (DEPLOY.md §4)"
             exit 0
           fi
           curl -fsS -X POST "$DEPLOY_HOOK_URL" -o /dev/null
