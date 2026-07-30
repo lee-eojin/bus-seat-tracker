@@ -1,0 +1,28 @@
+<!doctype html><meta charset="utf-8">
+<style>
+*{box-sizing:border-box}html,body{margin:0}
+body{width:1200px;height:1500px;background:#E31B34;
+font-family:-apple-system,"Apple SD Gothic Neo","Pretendard",sans-serif;
+display:flex;flex-direction:column;align-items:center;justify-content:center;position:relative}
+.mark{margin-top:-40px}
+.word{margin:64px 0 0;font-size:88px;font-weight:800;letter-spacing:-.035em;color:#fff;line-height:1}
+.tag{margin:26px 0 0;font-size:26px;font-weight:600;color:#FFC9D0;letter-spacing:-.01em}
+.foot{position:absolute;left:0;right:0;bottom:60px;display:flex;justify-content:center;
+font-size:20px;font-weight:600;color:#F79DAA}
+</style>
+
+<svg class="mark" width="560" height="300" viewBox="0 0 560 300" fill="none">
+  <!-- 노선: 스케치의 꺾인 경로 그대로, 한 번 꺾여 내려간다 -->
+  <path d="M 28 84 H 300 Q 332 84 332 116 V 184 Q 332 216 364 216 H 532"
+        stroke="#fff" stroke-width="16" stroke-linecap="round"/>
+  <!-- 지나치는 정류장들 -->
+  <circle cx="104" cy="84" r="15" fill="#E31B34" stroke="#fff" stroke-width="13"/>
+  <circle cx="440" cy="216" r="15" fill="#E31B34" stroke="#fff" stroke-width="13"/>
+  <!-- 타는 정류장: 이중 링 - 스케치에서 파란 펜으로 두 번 감은 그 자리 -->
+  <circle cx="216" cy="84" r="52" fill="none" stroke="#fff" stroke-width="15"/>
+  <circle cx="216" cy="84" r="20" fill="#fff"/>
+</svg>
+
+<p class="word">빨간버스</p>
+<p class="tag">여기서 탈 수 있을까?</p>
+<div class="foot">outputs-eta-fawn.vercel.app</div>

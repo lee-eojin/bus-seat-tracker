@@ -110,3 +110,11 @@ GBIS API ──(collect-bus-seats.yml)──> bus-seat-tracker-data (private rep
 - git commit/push/merge는 사용자만 실행.
 - 공개 저장소에 API 키·원문 차량번호·수집 데이터·빌드 산출물 금지.
 - GBIS API는 공공데이터포털 일 호출 한도가 있다 — 서버 프록시로 전환하면 사용자 수 × 폴링 주기가 한도에 걸린다. **캐시 계층이 선택이 아니라 필수.**
+
+## 5. GA4 기본 계측 (2026-07-29)
+
+- 배포 빌드는 `prototype-bus/index.html`과 `legal.html`을 그대로 `site/prototype-bus/`에 복사한다.
+  따라서 두 원본 문서에 같은 Google 태그를 넣어야 배포 페이지 전체가 계측된다.
+- 기존 Google 태그는 없었다. 측정 ID는 `G-QFFRQ5Z4XX`.
+- 기존 개인정보 안내는 서버 저장이 없다고 적혀 있었지만, 실제 코드는 무작위 방문자 ID와 방문 기록,
+  설문 응답을 `/api/feedback`으로 전송한다. GA4 도입과 함께 실제 처리 항목을 기준으로 문구를 수정했다.
