@@ -1,0 +1,64 @@
+<!doctype html><meta charset="utf-8">
+<style>
+*{box-sizing:border-box}html,body{margin:0}
+body{width:1200px;height:1500px;background:#FBF2E5;position:relative;
+display:flex;align-items:center;justify-content:center}
+</style>
+
+<svg width="1200" height="1500" viewBox="0 0 1200 1500" fill="none">
+  <!-- ── 위: 판정 마크 (라이트 버전, 링은 그림과 같은 블루) ── -->
+  <g transform="translate(344, 130) scale(0.8)">
+    <defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x1="24" y1="0" x2="244" y2="0">
+      <stop offset="0" stop-color="#1f9d57"/><stop offset=".38" stop-color="#1f9d57"/>
+      <stop offset=".62" stop-color="#dd9c07"/><stop offset="1" stop-color="#dd9c07"/></linearGradient></defs>
+    <path d="M 24 96 H 244" stroke="url(#g)" stroke-width="17" stroke-linecap="round"/>
+    <path d="M 244 96 H 348 Q 384 96 384 132 V 204 Q 384 240 420 240 H 616" stroke="#D91830" stroke-width="17" stroke-linecap="round"/>
+    <circle cx="106" cy="96" r="15" fill="#FBF2E5" stroke="#1f9d57" stroke-width="12"/>
+    <circle cx="512" cy="240" r="15" fill="#FBF2E5" stroke="#D91830" stroke-width="12"/>
+    <circle cx="244" cy="96" r="66" fill="rgba(44,62,143,.06)"/>
+    <circle cx="244" cy="96" r="55" fill="none" stroke="#2C3E8F" stroke-width="16"/>
+    <circle cx="244" cy="96" r="21" fill="#2C3E8F"/>
+  </g>
+
+  <!-- ── 아래: 연어를 들어올린 고양이 ── -->
+  <g stroke="#2C3E8F" stroke-width="11" stroke-linecap="round" fill="none">
+    <!-- 물고기 몸통 -->
+    <path d="M 330 690 C 360 600, 480 555, 620 560 C 740 565, 840 615, 875 690
+             C 840 765, 740 815, 620 820 C 480 825, 360 780, 330 690 Z"/>
+    <!-- 꼬리 -->
+    <path d="M 338 652 L 245 592 C 274 655, 274 725, 245 788 L 338 728"/>
+    <!-- 아가미 -->
+    <path d="M 690 628 C 653 664, 653 716, 690 752"/>
+    <!-- 눈 -->
+    <circle cx="782" cy="656" r="24"/>
+    <circle cx="782" cy="656" r="11" fill="#2C3E8F" stroke="none"/>
+
+    <!-- 팔 -->
+    <path d="M 452 1240 C 455 1080, 462 930, 470 836"/>
+    <path d="M 512 1240 C 512 1100, 512 960, 512 856"/>
+    <path d="M 470 836 C 470 816, 494 810, 504 826"/>
+    <path d="M 748 1240 C 745 1080, 738 930, 730 836"/>
+    <path d="M 688 1240 C 688 1100, 688 960, 688 856"/>
+    <path d="M 730 836 C 730 816, 706 810, 696 826"/>
+
+    <!-- 고양이 머리 (귀 포함) -->
+    <path d="M 515 1030 C 512 950, 528 900, 549 883 L 556 836 L 592 868
+             C 597 867, 603 867, 608 868 L 644 836 L 651 883
+             C 672 900, 688 950, 685 1030 C 685 1078, 515 1078, 515 1030 Z"/>
+    <!-- 코와 입 -->
+    <path d="M 600 990 L 600 1010"/>
+    <path d="M 600 1010 C 593 1018, 586 1018, 582 1013"/>
+    <path d="M 600 1010 C 607 1018, 614 1018, 618 1013"/>
+    <!-- 수염 -->
+    <path d="M 545 968 L 490 958"/><path d="M 545 984 L 492 982"/><path d="M 545 1000 L 494 1004"/>
+    <path d="M 655 968 L 710 958"/><path d="M 655 984 L 708 982"/><path d="M 655 1000 L 706 1004"/>
+
+    <!-- 강조선 -->
+    <path d="M 222 548 L 274 572"/><path d="M 202 662 L 258 668"/><path d="M 226 788 L 276 762"/>
+    <path d="M 938 582 L 988 558"/><path d="M 942 668 L 998 662"/><path d="M 932 748 L 984 770"/>
+  </g>
+  <!-- 눈, 코 (면 채움) -->
+  <circle cx="574" cy="950" r="7" fill="#2C3E8F"/>
+  <circle cx="626" cy="950" r="7" fill="#2C3E8F"/>
+  <path d="M 592 982 L 608 982 L 600 992 Z" fill="#2C3E8F"/>
+</svg>
