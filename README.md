@@ -136,15 +136,7 @@ GBIS는 톨게이트·분기점처럼 노선이 지나가기만 하는 지점을
 
 ## 문서
 
-| | |
-|---|---|
-| `DEPLOY.md` | 배포 절차, 호출 예산, 남은 것 |
-| `docs/proposal.md` | 기획서. 무엇을 왜 만드는가 |
-| `docs/market-size.md` | 두 노선의 평일 수송 규모 측정 |
-| `docs/boarding-model-v2.md` | 탑승 모델 v2 설계. 현행 구현의 근거 |
-| `docs/boarding-model.md` | 탑승 모델 v1 명세. 백테스트의 비교 기준선으로 보존 |
-| `docs/queue-recovery.md` | 대기 인원 복원 방법과 그 한계 |
-| `docs/validation-2026-07-24.md` | 층-1 검증 보고서 |
+배포와 운영은 `DEPLOY.md`에 있다. 나머지 문서는 `docs/`에 모여 있고, 읽는 순서와 각 문서의 지위는 [docs/README.md](docs/README.md)가 안내한다.
 
 ## 브랜치
 
