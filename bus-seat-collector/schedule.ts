@@ -99,17 +99,52 @@ export function activeWindow(atMs: number): ActiveWindow | null {
   };
 }
 
+function coveringWindow(atMs: number): CollectionWindow | null {
+  const minutes = seoulMinutes(atMs);
+  return windowsFor(atMs).find((candidate) => minutes >= candidate.start && minutes < candidate.end) ?? null;
+}
+
+function windowIntervalSeconds(window: CollectionWindow, atMs: number): number {
+  const minutes = seoulMinutes(atMs);
+  const dense = window.denseStart !== undefined
+    && window.denseEnd !== undefined
+    && minutes >= window.denseStart
+    && minutes < window.denseEnd
+    && (window.denseDay === undefined || window.denseDay === seoulDay(atMs));
+  return dense ? (window.denseInterval ?? window.interval) : window.interval;
+}
+
 /** 루프가 조밀 구간을 넘나들 수 있으므로 간격은 사이클마다 다시 정한다. */
 export function scheduledIntervalSeconds(atMs: number): number {
-  const minutes = seoulMinutes(atMs);
-  const found = windowsFor(atMs).find((candidate) => minutes >= candidate.start && minutes < candidate.end);
-  if (!found) return peakIntervalSeconds;
-  const dense = found.denseStart !== undefined
-    && found.denseEnd !== undefined
-    && minutes >= found.denseStart
-    && minutes < found.denseEnd
-    && (found.denseDay === undefined || found.denseDay === seoulDay(atMs));
-  return dense ? (found.denseInterval ?? found.interval) : found.interval;
+  const found = coveringWindow(atMs);
+  return found ? windowIntervalSeconds(found, atMs) : peakIntervalSeconds;
+}
+
+// 창 밖 운행 시간대는 매시 정각 크론의 스냅샷 1회가 전부다 (collect-bus-seats.yml).
+export const offWindowSnapshotGapSeconds = 3600;
+
+/**
+ * 이 시각에 최신 스냅샷이 정상적으로 얼마나 낡아 있을 수 있는지(초).
+ * 창 안은 그 구간의 수집 간격, 창 밖 운행 시간대는 매시 1회 간격이다.
+ * 운행 시간 밖은 수집 자체가 없으므로 null — 신선도를 따질 수 없다.
+ */
+export function expectedSnapshotGapSeconds(atMs: number): number | null {
+  if (!withinServiceHours(atMs)) return null;
+  const found = coveringWindow(atMs);
+  return found ? windowIntervalSeconds(found, atMs) : offWindowSnapshotGapSeconds;
+}
+
+/**
+ * 두 시각 사이에서 운행 시간에 든 부분만 센 경과(ms). 관측 신선도는 이걸로 재야 한다.
+ * 벽시계 나이로 재면 심야 무수집 공백을 가로지르는 새벽 첫 발행이 전날 저녁 스냅샷을
+ * 근거로 삼는 정상 상황까지 낡음으로 오판한다.
+ */
+export function serviceElapsedMs(fromMs: number, toMs: number): number {
+  let total = 0;
+  for (let cursor = fromMs; cursor < toMs; cursor += 60_000) {
+    if (withinServiceHours(cursor)) total += Math.min(60_000, toMs - cursor);
+  }
+  return total;
 }
 
 // 스냅샷 운행 시간대 (KST): 평일 05:00-22:00, 주말 06:00 이후.

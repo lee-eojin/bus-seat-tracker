@@ -2,8 +2,14 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   activeWindow,
+  calibrationIntervalSeconds,
+  daytimeIntervalSeconds,
+  denseIntervalSeconds,
+  expectedSnapshotGapSeconds,
+  offWindowSnapshotGapSeconds,
   peakIntervalSeconds,
   scheduledIntervalSeconds,
+  serviceElapsedMs,
   weekdayWindows,
   windowHandoverMinutes,
   windowsFor,
@@ -130,5 +136,59 @@ describe('KST 변환', () => {
 
   it('일요일 심야는 주말로 센다', () => {
     assert.deepEqual(windowsFor(kst('일', 23, 30)), []);
+  });
+});
+
+describe('expectedSnapshotGapSeconds', () => {
+  it('창 안에서는 그 구간의 수집 간격이다', () => {
+    assert.equal(expectedSnapshotGapSeconds(kst('월', 7, 30)), denseIntervalSeconds);
+    assert.equal(expectedSnapshotGapSeconds(kst('월', 6, 40)), peakIntervalSeconds);
+    assert.equal(expectedSnapshotGapSeconds(kst('월', 11, 0)), daytimeIntervalSeconds);
+    assert.equal(expectedSnapshotGapSeconds(kst('월', 18, 30)), denseIntervalSeconds);
+  });
+
+  it('창 밖 운행 시간대는 매시 1회 간격이다', () => {
+    assert.equal(expectedSnapshotGapSeconds(kst('월', 5, 30)), offWindowSnapshotGapSeconds);
+    assert.equal(expectedSnapshotGapSeconds(kst('월', 21, 0)), offWindowSnapshotGapSeconds);
+    assert.equal(expectedSnapshotGapSeconds(kst('토', 12, 0)), offWindowSnapshotGapSeconds);
+  });
+
+  it('운행 시간 밖은 null이다 — 수집이 없어 신선도를 따질 수 없다', () => {
+    assert.equal(expectedSnapshotGapSeconds(kst('월', 4, 59)), null);
+    assert.equal(expectedSnapshotGapSeconds(kst('월', 22, 0)), null);
+    assert.equal(expectedSnapshotGapSeconds(kst('토', 5, 59)), null);
+  });
+
+  it('scheduledIntervalSeconds와 달리 창 밖에서 피크 간격으로 좁히지 않는다', () => {
+    const offWindow = kst('월', 21, 0);
+    assert.equal(scheduledIntervalSeconds(offWindow), peakIntervalSeconds);
+    assert.equal(expectedSnapshotGapSeconds(offWindow), offWindowSnapshotGapSeconds);
+  });
+
+  it('수요일 낮 보정 구간은 2분, 다른 요일 같은 시각은 20분이다', () => {
+    assert.equal(expectedSnapshotGapSeconds(kst('수', 13, 10)), calibrationIntervalSeconds);
+    assert.equal(expectedSnapshotGapSeconds(kst('목', 13, 10)), daytimeIntervalSeconds);
+  });
+});
+
+describe('serviceElapsedMs', () => {
+  it('운행 시간 안에서는 벽시계 경과와 같다', () => {
+    assert.equal(serviceElapsedMs(kst('월', 8, 0), kst('월', 8, 40)), 40 * 60_000);
+  });
+
+  it('평일 심야 공백은 세지 않는다 — 전날 21:04 근거의 새벽 05:19 발행은 75분이다', () => {
+    assert.equal(serviceElapsedMs(kst('월', 21, 4), kst('화', 5, 19)), 75 * 60_000);
+  });
+
+  it('금요일 저녁에서 토요일 아침으로 넘어가면 주말 운행 시작(06:00)부터 다시 센다', () => {
+    assert.equal(serviceElapsedMs(kst('금', 21, 0), kst('토', 6, 30)), 90 * 60_000);
+  });
+
+  it('전 구간이 운행 시간 밖이면 0이다', () => {
+    assert.equal(serviceElapsedMs(kst('월', 23, 0), kst('화', 4, 0)), 0);
+  });
+
+  it('역전된 구간은 0이다', () => {
+    assert.equal(serviceElapsedMs(kst('월', 9, 0), kst('월', 8, 0)), 0);
   });
 });
