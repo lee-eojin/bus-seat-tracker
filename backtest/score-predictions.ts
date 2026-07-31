@@ -21,17 +21,26 @@ const matchWindowMs = 90 * 60_000;
 // 성긴 시간대(낮 20분·창 밖 매시 1회)의 정상 발행이 전부 경보에 걸려, 검증
 // 워크플로가 생긴 날부터 하루 수백 건씩 오탐을 냈다.
 //
-// 간격은 발행 시각과 근거 시각 중 더 성긴 쪽을 쓴다. 조밀 구간이 막 시작한 발행의
-// 근거는 직전의 성긴 시대에 수집된 게 정상이라, 발행 시각 간격만 보면 그 경계마다
-// 오탐이 난다. 나이도 운행 시간만 세서(serviceElapsedMs) 잰다 — 새벽 첫 발행이
-// 그날 첫 수집보다 먼저 돌면 근거가 전날 저녁 스냅샷인 게 정상이기 때문이다.
+// 운행 시간 밖 발행은 채점하지 않는다. 수집도 승객도 없는 시간대라 낡은 게 정상이고
+// 해가 없다. 실제로 자정 아카이브 크론이 밀리면 심야 발행은 이틀 전 데이터까지
+// 물게 되는데, 아침 첫 수집이 오면 저절로 낫는다.
+//
+// 간격은 근거부터 발행까지 구간이 가로지르는 시대 중 가장 성긴 것을 쓴다. 끝점만
+// 보면 새는 경우가 있다: 조밀 구간이 막 시작한 발행의 근거는 직전의 성긴 시대 것이
+// 정상이라, 발행 시각 간격만으로는 그 경계마다 오탐이 난다.
+// 나이도 운행 시간만 세서(serviceElapsedMs) 잰다 — 새벽 첫 발행이 그날 첫 수집보다
+// 먼저 돌면 근거가 전날 저녁 스냅샷인 게 정상이기 때문이다.
 const publishLagAllowanceMs = 15 * 60_000;
 
 function stalenessAlarmMs(publishedMs: number, basisMs: number): number | null {
-  const gaps = [expectedSnapshotGapSeconds(publishedMs), expectedSnapshotGapSeconds(basisMs)]
-    .filter((gap): gap is number => gap !== null);
-  if (gaps.length === 0) return null;
-  return Math.max(...gaps) * 2 * 1000 + publishLagAllowanceMs;
+  if (expectedSnapshotGapSeconds(publishedMs) === null) return null;
+  let sparsestGapSeconds: number | null = null;
+  for (let cursor = basisMs; cursor <= publishedMs; cursor += 60_000) {
+    const gap = expectedSnapshotGapSeconds(cursor);
+    if (gap !== null && (sparsestGapSeconds === null || gap > sparsestGapSeconds)) sparsestGapSeconds = gap;
+  }
+  if (sparsestGapSeconds === null) return null;
+  return sparsestGapSeconds * 2 * 1000 + publishLagAllowanceMs;
 }
 
 interface Options {
