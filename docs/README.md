@@ -1,17 +1,15 @@
 # 문서 안내
 
-읽는 순서와 각 문서의 지위. 같은 상태 표기를 각 문서 상단에도 적어 둔다.
+읽는 순서와 각 문서의 지위. 상태 표기는 각 문서 상단에도 같은 형식으로 있다.
 
 ## 읽는 순서
 
-처음이라면 이 순서가 빠르다.
-
-1. [proposal.md](proposal.md) 기획서. 무엇을 왜 만드는가, 수요를 어떻게 검증했는가
+1. [proposal.md](proposal.md) 기획서. 무엇을 왜 만드는가, 수요 검증
 2. [boarding-model-v2.md](boarding-model-v2.md) 현행 구현이 따르는 설계
-3. [queue-recovery.md](queue-recovery.md) 대기 인원 복원 연구 기록. 상단의 현재 결론부터 읽는다
+3. [queue-recovery.md](queue-recovery.md) 대기 인원 복원 연구 기록. 상단 현재 결론부터
 4. [validation-2026-07-24.md](validation-2026-07-24.md) 층-1 검증 보고서
 
-모델을 만질 사람은 2~4가 본편이고, 제품과 시장이 궁금하면 1과 [market-size.md](market-size.md)로 충분하다.
+모델 작업은 2~4가 본편. 제품과 시장만 보려면 1과 [market-size.md](market-size.md).
 
 ## 문서 상태
 
@@ -24,6 +22,6 @@
 | [queue-recovery.md](queue-recovery.md) | 연구 기록 | 대기 인원 복원. 시간순 누적이라 중간 결론은 뒤 절에서 수정된다 |
 | [boarding-model.md](boarding-model.md) | 보관 | v1 명세. v2로 대체됐고 백테스트 기준선 full-frequency의 원형으로 유지 |
 
-상태는 넷이다. 현재 기준은 지금 구현과 판단의 근거다. 검증 기록과 연구 기록은 결과와 과정을 그 시점 그대로 보존한다. 보관은 대체됐지만 참조 때문에 남긴 문서다.
+상태 표기: 현재 기준(지금 구현과 판단의 근거), 검증 기록·연구 기록(그 시점의 결과와 과정을 보존), 보관(대체됐지만 참조용으로 유지).
 
-문서와 절 번호는 코드 주석(`shared/`, `backtest/`)과 CI 요약이 참조한다. 파일을 옮기거나 절 번호를 당기려면 참조를 함께 고쳐야 한다.
+문서 경로와 절 번호는 코드 주석(`shared/`, `backtest/`)과 CI 요약이 참조한다. 옮기거나 당기려면 참조도 같이 고쳐야 한다.

@@ -22,7 +22,7 @@ export function departedWithSeats(pass: StopPass): boolean {
 }
 
 /**
- * 버스 한 대의 통과만으로 대기 인원에 대해 말할 수 있는 것 (docs/queue-recovery.md §10).
+ * 버스 한 대의 통과만으로 대기 인원을 말할 수 있는 것 (docs/queue-recovery.md §10).
  *
  *   좌석을 남기고 출발 → 대기 = 승차 인원 (정확)
  *   만차로 출발       → 대기 ≥ 승차 인원 (하한)
