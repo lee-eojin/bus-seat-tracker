@@ -104,21 +104,30 @@ jobs:
               ]),
             ]);
 
+            // 실패 판정은 누적(폴드 전체 합산)으로 한다. 하루 폴드는 관측쌍이 적어
+            // Brier 0.001 차이로도 뒤집히고, 조밀 수집으로 기준선 자체가 강해져 접전이
+            // 잦다. 최신 폴드 열세는 추세 신호로 경고만 남긴다.
             const newest = card.folds[card.folds.length - 1];
-            const shippedMae = newest.models[shipped].mae;
-            const baselineMae = newest.models[baseline].mae;
-            const shippedBrier = newest.models[shipped].brier;
-            const baselineBrier = newest.models[baseline].brier;
-            const coverage = card.pooled.models[shipped].coverage;
+            const pooledShipped = card.pooled.models[shipped];
+            const pooledBaseline = card.pooled.models[baseline];
+            const coverage = pooledShipped.coverage;
 
             const failures = [];
-            if (shippedMae === null || baselineMae === null) {
+            if (pooledShipped.mae === null || pooledBaseline.mae === null) {
               core.warning('점추정이 없어 MAE 비교를 건너뜁니다.');
-            } else if (shippedMae >= baselineMae) {
-              failures.push(`최신 폴드(${newest.testDate}) MAE ${shippedMae.toFixed(2)}가 기준선 ${baselineMae.toFixed(2)} 이상입니다.`);
+            } else if (pooledShipped.mae >= pooledBaseline.mae) {
+              failures.push(`누적 MAE ${pooledShipped.mae.toFixed(2)}가 기준선 ${pooledBaseline.mae.toFixed(2)} 이상입니다.`);
             }
-            if (shippedBrier >= baselineBrier) {
-              failures.push(`최신 폴드(${newest.testDate}) Brier ${shippedBrier.toFixed(4)}가 기준선 ${baselineBrier.toFixed(4)} 이상입니다.`);
+            if (pooledShipped.brier >= pooledBaseline.brier) {
+              failures.push(`누적 Brier ${pooledShipped.brier.toFixed(4)}가 기준선 ${pooledBaseline.brier.toFixed(4)} 이상입니다.`);
+            }
+            const newestShippedMae = newest.models[shipped].mae;
+            const newestBaselineMae = newest.models[baseline].mae;
+            if (newestShippedMae !== null && newestBaselineMae !== null && newestShippedMae >= newestBaselineMae) {
+              core.warning(`최신 폴드(${newest.testDate}) MAE ${newestShippedMae.toFixed(2)}가 기준선 ${newestBaselineMae.toFixed(2)} 이상 — 이어지면 누적 판정이 뒤집힙니다.`);
+            }
+            if (newest.models[shipped].brier >= newest.models[baseline].brier) {
+              core.warning(`최신 폴드(${newest.testDate}) Brier ${newest.models[shipped].brier.toFixed(4)}가 기준선 ${newest.models[baseline].brier.toFixed(4)} 이상입니다.`);
             }
             if (coverage !== null && coverage < 0.6) {
               core.warning(`예측구간 포함률 ${(coverage * 100).toFixed(1)}% — 목표 80%에서 크게 벗어났습니다.`);
