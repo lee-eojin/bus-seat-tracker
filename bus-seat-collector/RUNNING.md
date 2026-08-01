@@ -89,7 +89,7 @@ GitHub Actions Secrets에 다음 값을 등록한다.
 
 ### 화면 신선도 기준
 
-`prototype-bus/app.ts`의 `expectedIntervalMinutes()`가 위 창 정의와 같은 값을 갖는다.
+`prototype-bus/app.ts`의 `expectedIntervalMinutes()`는 위 창 정의와 값이 같다.
 정상 ≤ 기대주기×2, 경고 ≤ ×4, 초과 시 중단 배너. 심야 휴지와 운행 재개 직후 2시간은
 마지막 정시 스냅샷 이후 경과를 기대 주기로 삼아, 밤새 그리고 새벽 첫 스냅샷이 착지하기
 전에 배너가 오작동하지 않게 한다. 창 정의를 바꾸면 두 곳을 같이 바꾼다.

@@ -79,7 +79,7 @@ export function fullDepartureStreaks(runs: VehicleObservation[][], since: number
 export type BoardingVerdict = 'roomy' | 'tight' | 'unlikely';
 
 // 좌석이 기대 수요보다 이만큼 많아야 "여유"로 본다. 좌석 예보와 수요 추정이 각각 3~4명
-// 오차를 갖는 것을 감안한 값이며, 조밀 수집분이 쌓이면 다시 맞춰야 하는 잠정치다.
+// 오차가 있는 것을 감안한 값이며, 조밀 수집분이 쌓이면 다시 맞춰야 하는 잠정치다.
 export const verdictSeatMargin = 10;
 
 /**
