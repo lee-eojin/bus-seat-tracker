@@ -3,7 +3,7 @@ import { neon } from '@neondatabase/serverless';
 // 현장 설문과 익명 방문 계측을 받는다.
 //
 // 두 가지를 한 엔드포인트로 받는 이유는 재방문율이 이 서비스의 결정적 지표이고
-// (docs/proposal.md 7.2), 그걸 재려면 설문 응답자와 방문자를 같은 ID로 이어야 하기
+// (docs/01-proposal.md 7.2), 그걸 재려면 설문 응답자와 방문자를 같은 ID로 이어야 하기
 // 때문이다. 남기는 것은 브라우저가 만든 무작위 ID뿐이라 개인을 식별하지 않는다.
 
 const maxNoteLength = 1000;

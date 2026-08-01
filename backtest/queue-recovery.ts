@@ -16,7 +16,7 @@ import {
 import { boardingVerdict, expectedDemandAt, nextFullDepartureStreak, queueStatement, verdictSeatMargin, type BoardingVerdict } from '../shared/boarding.js';
 import { loadRouteCaches, loadSnapshots } from './data-source.js';
 
-// 좌석 관측만으로 정류장 대기 인원을 복원한다 (docs/queue-recovery.md).
+// 좌석 관측만으로 정류장 대기 인원을 복원한다 (docs/04-queue-recovery.md).
 //
 // 직행좌석버스는 입석이 없다. 그러므로 버스가 좌석을 남기고 출발했다는 것은 그 순간
 // 대기 줄이 비었다는 뜻이고, 이 사건이 큐 길이 0의 관측점이 된다. 큐가 0인 두 시점
@@ -79,7 +79,7 @@ const seoulClock = (time: number): string => new Date(time + 9 * 3600 * 1000).to
 
 // 대상 정류장 바로 뒤에 이어지는 미정차 지점들. 승차가 없으므로 여기서 읽은 잔여석이
 // 곧 대상 정류장의 출발 상태다. 승차 가능한 정류장을 섞으면 하차분이 들어와
-// 도착률이 음수로 나온다 (docs/queue-recovery.md §7 구현 주의).
+// 도착률이 음수로 나온다 (docs/04-queue-recovery.md §7 구현 주의).
 function passThroughAfter(cache: RouteCache, stopSequence: number): number[] {
   const byName = new Map(cache.stops.map((stop) => [stop.sequence, stop.name]));
   const sequences: number[] = [];
@@ -123,7 +123,7 @@ interface Interval {
 
 // 상류 관측에서 대상 정류장 도착 잔여석까지 좌석 분포를 전파한다. 기대 승차를 그냥 빼면
 // 상류 기대치가 좌석 수를 넘을 때 음수로 잘리는데, 실제 버스는 자리가 없으면 그만큼만
-// 태우므로 분포 전파가 이 제약을 지켜 준다 (docs/queue-recovery.md §8).
+// 태우므로 분포 전파가 이 제약을 지켜 준다 (docs/04-queue-recovery.md §8).
 function propagateToStop(
   profile: ReturnType<typeof buildDeconvolvedProfileRoute>,
   fromSequence: number,
@@ -385,7 +385,7 @@ async function main(): Promise<void> {
     ]);
 
     console.log('\n' + '═'.repeat(78));
-    console.log(`탑승 가능성 판정 · 여유폭 ${verdictSeatMargin}석 (docs/queue-recovery.md §10)`);
+    console.log(`탑승 가능성 판정 · 여유폭 ${verdictSeatMargin}석 (docs/04-queue-recovery.md §10)`);
     console.log('═'.repeat(78));
     console.log('  날짜   시각    좌석   기대수요  만석연속   판정     실제');
     for (const date of dates) {

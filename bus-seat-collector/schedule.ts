@@ -27,7 +27,7 @@ export const daytimeIntervalSeconds = 1200;
 export const calibrationIntervalSeconds = 120;
 
 // 피크 조밀 구간은 정류장별 도착과 출발을 한 번의 관측으로 잡기 위한 것이다
-// (docs/queue-recovery.md §8). 10분 간격에서는 버스가 관측 사이에 5~7정류장을 지나
+// (docs/04-queue-recovery.md §8). 10분 간격에서는 버스가 관측 사이에 5~7정류장을 지나
 // 정류장 단위 승차량을 읽을 수 없다. 배치 근거는 만석 분포 실측(RUNNING.md)과 필드
 // 기록 시각이다. 아침 절정 07:00-08:00과 범계역 기록(08:37), 저녁 절정 18:00-18:30과
 // 판교역 기록(18:57)이 모두 안에 들어온다. 전 피크를 60초로 돌리면 API 한도에 육박한다.

@@ -52,7 +52,7 @@ GBIS API ──(collect-bus-seats.yml)──> bus-seat-tracker-data (private rep
                                           └──> GitHub Pages 정적 사이트 (prototype-bus/)
 ```
 
-- 수집: 평일 피크(07:00~09:00, 18:00~19:30) 60초, 피크 창(06:30~10:00, 17:30~20:30) 10분, 그 외 운행시간 매시, 심야 휴지.
+- 수집: 평일 피크(07:00\~09:00, 18:00\~19:30) 60초, 피크 창(06:30\~10:00, 17:30\~20:30) 10분, 그 외 운행시간 매시, 심야 휴지.
 - 저장: git 브랜치 `collect/YYYY-MM-DD`에 누적 → 다음날 main 단일 아카이브 커밋.
 - 발행: 매시 17분·47분. **화면 신선도 하한이 30분**이라 실시간이 아니다.
 - 실시간 오버레이는 브라우저가 GBIS를 직접 호출 — `data/config.js`에 키를 넣는 방식이라 **공개 배포 시 키 노출**. README에도 "그때는 프록시가 필요"라고 이미 적혀 있다.
@@ -68,14 +68,14 @@ GBIS API ──(collect-bus-seats.yml)──> bus-seat-tracker-data (private rep
 | `prototype-bus/build-data.ts` | 364 | JSONL → 브라우저 데이터 |
 | `bus-seat-collector/collector.ts` | 251 | GBIS 수집기 |
 
-### 검증된 모델 성과 (docs/validation-2026-07-24.md)
+### 검증된 모델 성과 (docs/05-validation-2026-07-24.md)
 - 도착 좌석 MAE **4.34석** (naive-persist 6.91 대비 우세, 모든 horizon)
 - 만석 Brier **0.046** (v1 만석빈도 0.070, naive 0.083 대비 우세)
 - 예측구간 포함률 74.9% (목표 80% 미달 — 구간이 좁다)
 - **+1 정류장 귀속 오프셋 실증**: API 잔여석이 "도착 시점(승차 반영 전)" 값임을 필드 실측으로 확정
 - 남은 편향: 만석 확률 과소예측(under-confident), u_day·headway 층 미구현
 
-### 아직 안 되는 것 (docs/queue-recovery.md §7, §14)
+### 아직 안 되는 것 (docs/04-queue-recovery.md §7, §14)
 - **대기 인원 예측기는 아직 못 씀**. λ 날짜 간 분산 미측정(조밀 데이터 1일치). 사후 재구성만 가능.
 - 혼잡 구간 하한이 실측 대비 최대 4배 느슨함.
 - 중간 투입 차량(§13)을 모델이 못 봄.

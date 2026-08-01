@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url';
 //   BUS_DATA_DIR         이미 받아 둔 수집 데이터 경로 (로컬 확인용)
 //   BUS_DATA_REPO_TOKEN  비공개 저장소를 클론한다 (Vercel 빌드)
 //
-// 라이브 예측 로그(`--predictions`)는 여기서 만들지 않는다. 그것은 비공개 저장소에 커밋을
-// 남기는 작업이라 빌드의 부수 효과가 되면 안 된다 — GitHub Actions가 계속 담당한다.
+// 라이브 예측 로그(`--predictions`)는 여기서 만들지 않는다. 비공개 저장소에 커밋을 남기는
+// 작업이라 빌드의 부수 효과가 되면 안 된다 — GitHub Actions가 계속 담당한다.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(here, '..');

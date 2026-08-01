@@ -65,7 +65,7 @@ export function plainNumbers({ w, h }) {
       <td class="num" style="width:130px">${v}</td>
       <td style="padding-left:24px;color:#5b6472;font-size:15px">${note}</td></tr>`).join('')}
   </table>
-  <div class="foot"><span>github.com/lee-eojin/bus-seat-tracker</span><span>docs/market-size.md · docs/validation-2026-07-24.md</span></div>
+  <div class="foot"><span>github.com/lee-eojin/bus-seat-tracker</span><span>docs/02-market-size.md · docs/05-validation-2026-07-24.md</span></div>
 </div>`;
 }
 

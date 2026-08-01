@@ -1,4 +1,4 @@
-// 수식 카드. docs/queue-recovery.md와 docs/boarding-model-v2.md의 실제 식만 쓴다.
+// 수식 카드. docs/04-queue-recovery.md와 docs/03-boarding-model-v2.md의 실제 식만 쓴다.
 // 장식으로 만든 식은 넣지 않는다. 읽는 사람이 개발자다.
 
 export const mathCss = `
@@ -125,6 +125,6 @@ export function mathCard({ w, h }) {
   <p class="wm">빨간버스 <b>좌석 예보 모델</b></p>
   ${figLambda()}${figQueue()}${figCensor()}${figPropagate()}
   <div class="foot"><span class="dot"></span>
-    <span>docs/queue-recovery.md · docs/boarding-model-v2.md</span></div>
+    <span>docs/04-queue-recovery.md · docs/03-boarding-model-v2.md</span></div>
 </div>`;
 }
