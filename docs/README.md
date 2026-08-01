@@ -9,7 +9,7 @@
 3. [queue-recovery.md](queue-recovery.md) 대기 인원 복원 연구 기록. 상단 현재 결론부터
 4. [validation-2026-07-24.md](validation-2026-07-24.md) 층-1 검증 보고서
 
-모델 작업은 2~4가 본편. 제품과 시장만 보려면 1과 [market-size.md](market-size.md).
+모델 작업은 2\~4가 본편. 제품과 시장만 보려면 1과 [market-size.md](market-size.md).
 
 ## 문서 상태
 
