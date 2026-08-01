@@ -217,7 +217,7 @@ shared/            그대로 — 서버·클라이언트 공용
 
 협업 보드(09)에 없는 팀원 이름을 박지 않았다. 지금은 혼자이고 그게 모집하는 이유다.
 커서를 모집 중으로 두어 빈 자리를 드러내는 쪽이 정직하면서 메시지도 강하다.
-수식 카드(10)는 `docs/queue-recovery.md`와 `docs/boarding-model-v2.md`의 실제 식만 쓴다.
+수식 카드(10)는 `docs/04-queue-recovery.md`와 `docs/03-boarding-model-v2.md`의 실제 식만 쓴다.
 장식으로 만든 식은 넣지 않는다. 읽는 사람이 개발자다.
 
 ---
@@ -229,7 +229,7 @@ shared/            그대로 — 서버·클라이언트 공용
 1. 사용자 실측 기록 서버 수집 (localStorage → API) — 층-2 학습 루프의 유일한 입구
 2. DB 전환 (git JSONL → 시계열 DB) — 이용자 늘면 조회 지연이 먼저 터진다
 3. 노선 확장 (`ROUTE_NAMES` 하드코딩 제거, 온디맨드 수집)
-4. λ 날짜 간 분산 측정 → 대기 인원 예측기 승격 (`docs/queue-recovery.md` §14-2)
+4. λ 날짜 간 분산 측정 → 대기 인원 예측기 승격 (`docs/04-queue-recovery.md` §14-2)
 5. u_day·headway 층 추가 (범계역 잔여 갭 40.5 vs 24)
 
 ---
@@ -284,7 +284,7 @@ main 기준 새 브랜치에 cherry-pick으로 옮겨 해결했다(PR #9). merge
 
 ## 부록: 이전 계획 (연구 단계, 완료·이월)
 
-Phase 1 층-1 백테스트, Phase 1b 구간합 역산은 완료. 결과는 `docs/validation-2026-07-24.md`, `docs/queue-recovery.md`에 있다.
+Phase 1 층-1 백테스트, Phase 1b 구간합 역산은 완료. 결과는 `docs/05-validation-2026-07-24.md`, `docs/04-queue-recovery.md`에 있다.
 
 **이월된 미완 항목** (Phase S5로 흡수):
 - Phase 2 지속 캡처: localStorage 기록을 서버로 → S5-1

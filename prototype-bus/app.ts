@@ -1352,7 +1352,7 @@ applyEntryPreset();
 
 // ── 익명 방문 계측 ──
 // 통근 도구의 결정적 지표는 재방문율이다. 한 번 열고 마는 것은 구경이고 사흘 뒤에도
-// 여는 것이 도구다 (docs/proposal.md 7.2). 남기는 것은 무작위 ID와 방문 시각뿐이고
+// 여는 것이 도구다 (docs/01-proposal.md 7.2). 남기는 것은 무작위 ID와 방문 시각뿐이고
 // 개인을 식별할 값은 보내지 않는다.
 const visitorKey = 'bus-visitor-id';
 
@@ -1381,7 +1381,7 @@ recordVisit();
 
 // ── 현장 설문 ──
 // 관측은 버스 쪽에서 세었지 사람 쪽에서 세지 않았다. 한 사람이 얼마나 자주 보내는지는
-// 여기서만 나온다 (docs/proposal.md 6.7).
+// 여기서만 나온다 (docs/01-proposal.md 6.7).
 const surveySubmittedKey = 'bus-survey-submitted';
 
 function showSurvey(): void {

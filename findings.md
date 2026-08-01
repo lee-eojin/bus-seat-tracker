@@ -68,14 +68,14 @@ GBIS API ──(collect-bus-seats.yml)──> bus-seat-tracker-data (private rep
 | `prototype-bus/build-data.ts` | 364 | JSONL → 브라우저 데이터 |
 | `bus-seat-collector/collector.ts` | 251 | GBIS 수집기 |
 
-### 검증된 모델 성과 (docs/validation-2026-07-24.md)
+### 검증된 모델 성과 (docs/05-validation-2026-07-24.md)
 - 도착 좌석 MAE **4.34석** (naive-persist 6.91 대비 우세, 모든 horizon)
 - 만석 Brier **0.046** (v1 만석빈도 0.070, naive 0.083 대비 우세)
 - 예측구간 포함률 74.9% (목표 80% 미달 — 구간이 좁다)
 - **+1 정류장 귀속 오프셋 실증**: API 잔여석이 "도착 시점(승차 반영 전)" 값임을 필드 실측으로 확정
 - 남은 편향: 만석 확률 과소예측(under-confident), u_day·headway 층 미구현
 
-### 아직 안 되는 것 (docs/queue-recovery.md §7, §14)
+### 아직 안 되는 것 (docs/04-queue-recovery.md §7, §14)
 - **대기 인원 예측기는 아직 못 씀**. λ 날짜 간 분산 미측정(조밀 데이터 1일치). 사후 재구성만 가능.
 - 혼잡 구간 하한이 실측 대비 최대 4배 느슨함.
 - 중간 투입 차량(§13)을 모델이 못 봄.

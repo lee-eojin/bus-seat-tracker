@@ -163,7 +163,7 @@ export interface NetDemandEstimate {
 }
 
 // 3330에는 2층버스가 다녀 잔여석 68까지 실측됐다. 일반차 44석을 정원으로 가정하면 안 된다
-// (docs/boarding-model-v2.md Phase 0 정원 항목).
+// (docs/03-boarding-model-v2.md Phase 0 정원 항목).
 export const defaultSeatCapacity = 80;
 export const defaultDemandMinWeight = 1;
 

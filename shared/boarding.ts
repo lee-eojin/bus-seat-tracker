@@ -1,6 +1,6 @@
 import type { VehicleObservation } from './profile.js';
 
-// 탑승 가능성 판정 (docs/queue-recovery.md §10, 2026-07-27 범계역 19개 통과로 검증).
+// 탑승 가능성 판정 (docs/04-queue-recovery.md §10, 2026-07-27 범계역 19개 통과로 검증).
 //
 // 좌석 예보만으로는 "탈 수 있는가"에 답할 수 없다. 같은 대기 인원이 좌석에 따라 정반대
 // 결론을 내기 때문이다 — 대기 29명은 44석 버스에서 전원 탑승이고, 대기 17명은 13석
@@ -22,7 +22,7 @@ export function departedWithSeats(pass: StopPass): boolean {
 }
 
 /**
- * 버스 한 대의 통과만으로 대기 인원을 말할 수 있는 것 (docs/queue-recovery.md §10).
+ * 버스 한 대의 통과만으로 대기 인원을 말할 수 있는 것 (docs/04-queue-recovery.md §10).
  *
  *   좌석을 남기고 출발 → 대기 = 승차 인원 (정확)
  *   만차로 출발       → 대기 ≥ 승차 인원 (하한)
@@ -42,7 +42,7 @@ export function nextFullDepartureStreak(streak: number, pass: StopPass): number 
  * 정류장별 만석 연속 수를 최근 관측에서 센다.
  *
  * 같은 정류장에서 두 번 이상 잡힌 운행만 쓴다 — 한 번뿐이면 그 값이 도착인지 출발인지
- * 가릴 수 없기 때문이다(docs/queue-recovery.md §9). 따라서 조밀 수집 구간 밖에서는
+ * 가릴 수 없기 때문이다(docs/04-queue-recovery.md §9). 따라서 조밀 수집 구간 밖에서는
  * 항목이 아예 비고, 그것은 "연속 0"이 아니라 "모름"이다. 호출부는 둘을 구분해야 한다.
  *
  * 창은 [since, until] 양끝을 모두 닫는다. 상한이 없으면 기준 시각 이후의 통과까지 세어
