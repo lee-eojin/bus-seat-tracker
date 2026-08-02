@@ -11,6 +11,7 @@ const cacheSeconds = 120;
 const staleWhileRevalidateSeconds = 240;
 
 interface RequestLike {
+  method?: string;
   url?: string;
 }
 
@@ -21,11 +22,35 @@ interface ResponseLike {
 }
 
 export default async function handler(request: RequestLike, response: ResponseLike): Promise<void> {
-  const routeName = new URL(request.url ?? '/', 'http://localhost').searchParams.get('route') ?? '';
-
-  if (!Object.prototype.hasOwnProperty.call(allowedRoutes, routeName)) {
+  // CDN 캐시는 GET 응답만 저장한다. HEAD를 포함한 다른 메서드는 매번 함수까지 와서
+  // GBIS 원 호출이 나가므로(실측: HEAD 연속 요청이 전부 캐시 MISS) 전부 끊는다.
+  // 일 한도가 수집기와 공용이라 이 문이 열리면 수집까지 죽는다.
+  const method = (request.method ?? 'GET').toUpperCase();
+  if (method !== 'GET') {
     response.setHeader('Cache-Control', 'no-store');
-    response.status(400).json({ error: '지원하지 않는 노선입니다.', routes: Object.keys(allowedRoutes) });
+    response.setHeader('Allow', 'GET');
+    response.status(405).json({ error: 'GET만 지원합니다.' });
+    return;
+  }
+
+  // 캐시 키가 요청 URL 단위라, 같은 함수에 닿는 URL 변형 하나하나가 별개 캐시 엔트리로
+  // origin 호출을 만든다. 실측으로 확인된 변형은 중복 키(route=3330&route=X — 값마다
+  // 새 캐시 키)와 경로 변형(/api/live/, /api/live.ts — 각각 독립 캐시 키)이다. 퍼센트
+  // 인코딩은 플랫폼이 캐시 키와 함께 정규화해 핸들러에 오기 전에 접힌다.
+  // 그래서 경로와 쿼리를 원문 문자열 정확 일치로만 통과시킨다.
+  const requestUrl = request.url ?? '';
+  const questionMark = requestUrl.indexOf('?');
+  const rawPath = questionMark === -1 ? requestUrl : requestUrl.slice(0, questionMark);
+  const rawQuery = questionMark === -1 ? '' : requestUrl.slice(questionMark + 1);
+  const routeName = rawPath === '/api/live'
+    ? Object.keys(allowedRoutes).find((name) => rawQuery === `route=${name}`) ?? null
+    : null;
+  if (routeName === null) {
+    response.setHeader('Cache-Control', 'no-store');
+    response.status(400).json({
+      error: '지원하지 않는 요청입니다. /api/live?route=<노선> 형식만 받습니다.',
+      routes: Object.keys(allowedRoutes),
+    });
     return;
   }
 

@@ -245,7 +245,12 @@ async function refreshLiveVehicles(): Promise<void> {
     live = {
       routeId: route.route.id,
       vehicles: readLiveVehicles(payload, route.turnSequence),
-      fetchedAt: Date.now(),
+      // 수신 시각에서 CDN 캐시 나이(Age 헤더)를 빼 데이터의 실제 나이를 잰다. 캐시나
+      // stale-while-revalidate로 낡은 응답을 받아도 나이가 정직하게 표시되고, 한도
+      // (180초)를 넘으면 스냅샷 표시로 자연 강등된다. 서버 벽시계(apiQueryTime)와
+      // 비교하지 않는 이유는 시계가 몇 분 어긋난 기기에서 실시간 표시가 조용히
+      // 죽기 때문이다 — Age는 기간 값이라 시계 오차와 무관하다.
+      fetchedAt: Date.now() - Math.max(0, Number(response.headers.get('age') ?? '0') || 0) * 1000,
     };
     appendPhase0Observation(route, live.vehicles, readApiQueryTime(payload));
     // 해소 추적은 폴링 때마다 해야 한다. 렌더 시점에는 이미 버스가 지나간 뒤다.
