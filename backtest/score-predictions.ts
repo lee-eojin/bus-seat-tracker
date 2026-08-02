@@ -16,31 +16,48 @@ const projectRoot = path.resolve(currentDirectory, '..', '..');
 // 예측 시각으로부터 이 시간 안에 대상 정류장에 도착하지 않으면 대조를 포기한다.
 const matchWindowMs = 90 * 60_000;
 
-// 신선도 경보 임계. 수집 간격 두 배(수집기가 스스로 재시도하는 한 사이클 공백은
-// 봐준다)에 발행 워크플로 지연 여유를 더한다. 고정 임계(25분)를 쓰던 때는 수집이
-// 성긴 시간대(낮 20분·창 밖 매시 1회)의 정상 발행이 전부 경보에 걸려, 검증
-// 워크플로가 생긴 날부터 하루 수백 건씩 오탐을 냈다.
+// 신선도 판정. "발행 시점에 더 새 관측이 있었는데 낡은 근거를 썼는가"만 묻는다.
+// 수집이 멎어 새 관측 자체가 없었다면 발행 잘못이 아니므로 여기 잡히지 않는다 —
+// 그건 아래 수집 공백 검사가 따로 센다. 고정 임계(25분) 시절에는 수집이 성긴
+// 시간대의 정상 발행이 전부 걸렸고, 수집 간격 기반 임계로 바꾼 뒤에도 크론 스로틀이
+// 만든 수집 공백을 발행 탓으로 돌려 주말마다 오탐이 났다(2026-08-01, 124건).
 //
 // 운행 시간 밖 발행은 채점하지 않는다. 수집도 승객도 없는 시간대라 낡은 게 정상이고
 // 해가 없다. 실제로 자정 아카이브 크론이 밀리면 심야 발행은 이틀 전 데이터까지
 // 물게 되는데, 아침 첫 수집이 오면 저절로 낫는다.
 //
-// 간격은 근거부터 발행까지 구간이 가로지르는 시대 중 가장 성긴 것을 쓴다. 끝점만
-// 보면 새는 경우가 있다: 조밀 구간이 막 시작한 발행의 근거는 직전의 성긴 시대 것이
-// 정상이라, 발행 시각 간격만으로는 그 경계마다 오탐이 난다.
-// 나이도 운행 시간만 세서(serviceElapsedMs) 잰다 — 새벽 첫 발행이 그날 첫 수집보다
-// 먼저 돌면 근거가 전날 저녁 스냅샷인 게 정상이기 때문이다.
-const publishLagAllowanceMs = 15 * 60_000;
+// 여유 30분은 발행이 데이터를 클론한 뒤 예측을 만드는 사이에 새 스냅샷이 착지하는
+// 경합을 흡수한다.
+const publishFreshnessAllowanceMs = 30 * 60_000;
 
-function stalenessAlarmMs(publishedMs: number, basisMs: number): number | null {
-  if (expectedSnapshotGapSeconds(publishedMs) === null) return null;
+// 수집 공백 허용치. 관측 사이 간격(운행 시간만 합산)이 그 구간에서 기대되는 수집
+// 간격의 두 배 + 15분을 넘으면 공백이다. 한 사이클 결손까지는 정상으로 본다.
+// 구간이 가로지르는 시대 중 가장 성긴 것을 기준으로 잡아야 심야·조밀 경계에서
+// 오탐이 없다.
+function gapToleranceMs(fromMs: number, toMs: number): number | null {
   let sparsestGapSeconds: number | null = null;
-  for (let cursor = basisMs; cursor <= publishedMs; cursor += 60_000) {
+  for (let cursor = fromMs; cursor <= toMs; cursor += 60_000) {
     const gap = expectedSnapshotGapSeconds(cursor);
     if (gap !== null && (sparsestGapSeconds === null || gap > sparsestGapSeconds)) sparsestGapSeconds = gap;
   }
   if (sparsestGapSeconds === null) return null;
-  return sparsestGapSeconds * 2 * 1000 + publishLagAllowanceMs;
+  return sparsestGapSeconds * 2 * 1000 + 15 * 60_000;
+}
+
+function latestObservationAt(sortedTimes: number[], atMs: number): number | null {
+  let low = 0;
+  let high = sortedTimes.length - 1;
+  let found = -1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (sortedTimes[mid]! <= atMs) {
+      found = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return found >= 0 ? sortedTimes[found]! : null;
 }
 
 interface Options {
@@ -164,8 +181,13 @@ async function main(): Promise<void> {
 
   const routeNames = [...new Set(rows.map((row) => row.route))];
   const observationsByRoute = new Map<string, Map<string, VehicleObservation[]>>();
+  const observationTimesByRoute = new Map<string, number[]>();
   for (const routeName of routeNames) {
-    observationsByRoute.set(routeName, observationsByVehicle(await loadSnapshots(options.dataDirectory, routeName)));
+    const byVehicle = observationsByVehicle(await loadSnapshots(options.dataDirectory, routeName));
+    observationsByRoute.set(routeName, byVehicle);
+    const times = new Set<number>();
+    for (const list of byVehicle.values()) for (const observation of list) times.add(observation.time);
+    observationTimesByRoute.set(routeName, [...times].sort((left, right) => left - right));
   }
 
   const scored: Scored[] = [];
@@ -180,8 +202,10 @@ async function main(): Promise<void> {
       unknownBasis += 1;
     } else {
       const predictedAt = Date.parse(row.at);
-      const alarmMs = stalenessAlarmMs(predictedAt, predictedAt - age);
-      if (alarmMs !== null && serviceElapsedMs(predictedAt - age, predictedAt) > alarmMs) staleBasis += 1;
+      if (expectedSnapshotGapSeconds(predictedAt) !== null) {
+        const latestAvailable = latestObservationAt(observationTimesByRoute.get(row.route) ?? [], predictedAt);
+        if (latestAvailable !== null && latestAvailable - (predictedAt - age) > publishFreshnessAllowanceMs) staleBasis += 1;
+      }
     }
     if (!actual) {
       unmatched += 1;
@@ -190,13 +214,40 @@ async function main(): Promise<void> {
     scored.push({ row, actualSeats: actual.seats, error: row.seats - actual.seats, basisAgeMs: age });
   }
 
+  // 수집 공백. 채점일에 끝나는 관측 간격만 본다 — 공백의 책임은 발행이 아니라
+  // 수집(크론 스로틀, 단발 스냅샷 실패)에 있으므로 실패가 아니라 보고 대상이다.
+  const dayStartMs = Date.parse(`${targetDate}T00:00:00+09:00`);
+  const dayEndMs = dayStartMs + 24 * 3600 * 1000;
+  const collectionGaps: Array<{ route: string; from: string; to: string; serviceMinutes: number }> = [];
+  for (const [routeName, times] of observationTimesByRoute) {
+    for (let index = 1; index < times.length; index += 1) {
+      const from = times[index - 1]!;
+      const to = times[index]!;
+      if (to < dayStartMs || to >= dayEndMs) continue;
+      const tolerance = gapToleranceMs(from, to);
+      if (tolerance === null) continue;
+      const elapsed = serviceElapsedMs(from, to);
+      if (elapsed > tolerance) {
+        collectionGaps.push({
+          route: routeName,
+          from: new Date(from).toISOString(),
+          to: new Date(to).toISOString(),
+          serviceMinutes: Math.round(elapsed / 60_000),
+        });
+      }
+    }
+  }
+  collectionGaps.sort((left, right) => right.serviceMinutes - left.serviceMinutes);
+
   const horizons = [...new Set(rows.map((row) => row.horizon))].sort((left, right) => left - right);
   const byHorizon = Object.fromEntries(
     horizons.map((horizon) => [horizon, summarize(scored.filter((item) => item.row.horizon === horizon))]),
   );
 
+  const targetDay = new Date(`${targetDate}T00:00:00Z`).getUTCDay();
   const report = {
     date: targetDate,
+    weekend: targetDay === 0 || targetDay === 6,
     generatedAt: new Date().toISOString(),
     predictions: rows.length,
     scored: scored.length,
@@ -204,6 +255,7 @@ async function main(): Promise<void> {
     matchRate: rows.length > 0 ? scored.length / rows.length : 0,
     staleBasis,
     unknownBasis,
+    collectionGaps,
     overall: summarize(scored),
     byHorizon,
   };
@@ -212,7 +264,11 @@ async function main(): Promise<void> {
   console.log(`라이브 예측 채점 · ${targetDate}`);
   console.log('═'.repeat(70));
   console.log(`예측 ${rows.length}건 · 대조 성공 ${scored.length}건 (${(report.matchRate * 100).toFixed(1)}%) · 미대조 ${unmatched}건`);
-  console.log(`근거 관측이 발행 시각 수집 주기보다 낡은 예측 ${staleBasis}건 · 근거를 못 찾은 예측 ${unknownBasis}건`);
+  console.log(`더 새 관측이 있는데 낡은 근거로 발행된 예측 ${staleBasis}건 · 근거를 못 찾은 예측 ${unknownBasis}건`);
+  if (collectionGaps.length > 0) {
+    const worst = collectionGaps[0]!;
+    console.log(`수집 공백 ${collectionGaps.length}건 · 최대 ${worst.serviceMinutes}분 (${worst.route}, 운행 시간 기준)`);
+  }
   console.log('\n지평   n      MAE     편향   탑승가능 Brier');
   for (const horizon of horizons) {
     const metrics = byHorizon[String(horizon)];

@@ -137,10 +137,11 @@ jobs:
             // 재현 채점이 못 잡는 파이프라인 문제(낡은 프로파일, 멈춘 발행)가 여기서 드러난다.
             if (fs.existsSync('live-score.json')) {
               const live = JSON.parse(fs.readFileSync('live-score.json', 'utf8'));
+              const gaps = live.collectionGaps ?? [];
               core.summary.addHeading(`라이브 예측 채점 (${live.date})`, 3);
               core.summary.addRaw(
                 `예측 ${live.predictions}건 · 대조 성공 ${live.scored}건 (${(live.matchRate * 100).toFixed(1)}%) · ` +
-                `근거 관측이 낡은 예측 ${live.staleBasis}건 · 근거 미확인 ${live.unknownBasis}건\n\n`,
+                `낡은 근거 발행 ${live.staleBasis}건 · 근거 미확인 ${live.unknownBasis}건 · 수집 공백 ${gaps.length}건\n\n`,
               );
               const rows = Object.entries(live.byHorizon).filter(([, m]) => m.pairs > 0);
               if (rows.length > 0) {
@@ -151,11 +152,21 @@ jobs:
                   ]),
                 ]);
               }
+              // 발행이 그 시점의 최신 관측을 안 썼을 때만 실패다. 수집 자체의 공백은
+              // 크론 스로틀이나 수집 실패의 몫이라 경고로만 알린다.
               if (live.staleBasis > 0) {
-                failures.push(`라이브 예측 ${live.staleBasis}건이 낡은 관측을 근거로 발행됐습니다. 수집 또는 발행 파이프라인을 확인하세요.`);
+                failures.push(`라이브 예측 ${live.staleBasis}건이 더 새 관측이 있는데도 낡은 근거로 발행됐습니다. 발행 파이프라인을 확인하세요.`);
+              }
+              if (gaps.length > 0) {
+                const worst = gaps[0];
+                core.warning(`수집 공백 ${gaps.length}건 — 최대 ${worst.serviceMinutes}분 (${worst.route}, 운행 시간 기준). 크론 스로틀이거나 수집 실패다.`);
               }
               if (live.predictions > 0 && live.matchRate < 0.02) {
-                core.warning(`대조율 ${(live.matchRate * 100).toFixed(1)}% — 샘플링이 대상 정류장을 거의 놓치고 있습니다.`);
+                if (live.weekend) {
+                  core.summary.addRaw('주말은 매시 1회 수집이라 대조 표본이 구조적으로 적다.\n\n');
+                } else {
+                  core.warning(`대조율 ${(live.matchRate * 100).toFixed(1)}% — 샘플링이 대상 정류장을 거의 놓치고 있습니다.`);
+                }
               }
             } else {
               core.summary.addRaw('\n라이브 예측 기록이 아직 없습니다 (첫 발행 전이거나 대상일 기록 없음).\n');
