@@ -289,10 +289,15 @@ jobs:
               } catch (error) {
                 // 사이클이 실패해도 그 전에 저장된 성공 노선의 스냅샷은 올린다.
                 // 재시도까지 전부 실패해 실행이 끝나더라도 부분 데이터는 남는다.
+                // 여기서 드러난 인증 실패는 삼키면 토큰 갱신 대응이 늦어지므로 즉시 끊는다.
                 try {
                   await uploadChangedFiles();
                 } catch (uploadError) {
-                  core.warning(`실패 사이클의 성공분 업로드 실패: ${uploadError.message}`);
+                  if (uploadError.status === 401 || uploadError.status === 403) {
+                    abortReason = `데이터 저장소 인증 실패(${uploadError.status}). BUS_DATA_REPO_TOKEN을 갱신한다 — DEPLOY.md §3: ${uploadError.message}`;
+                  } else {
+                    core.warning(`실패 사이클의 성공분 업로드 실패: ${uploadError.message}`);
+                  }
                 }
                 consecutiveFailures += 1;
                 // octokit HttpError의 status. execFileSync도 status(종료 코드)를 달지만 0~255라 겹치지 않는다.

@@ -22,27 +22,33 @@ interface ResponseLike {
 }
 
 export default async function handler(request: RequestLike, response: ResponseLike): Promise<void> {
-  // CDN 캐시는 GET에만 적용되고 캐시 키에 쿼리 전체가 들어간다. 다른 메서드나 여분의
-  // 파라미터를 허용하면 요청마다 캐시를 뚫고 GBIS 원 호출이 나가, 일 예산이 외부
-  // 손에 놓인다 — 수집기와 같은 키라 수집까지 죽는다.
+  // CDN 캐시는 GET 응답만 저장한다. HEAD를 포함한 다른 메서드는 매번 함수까지 와서
+  // GBIS 원 호출이 나가므로(실측: HEAD 연속 요청이 전부 캐시 MISS) 전부 끊는다.
+  // 일 한도가 수집기와 공용이라 이 문이 열리면 수집까지 죽는다.
   const method = (request.method ?? 'GET').toUpperCase();
-  if (method !== 'GET' && method !== 'HEAD') {
+  if (method !== 'GET') {
     response.setHeader('Cache-Control', 'no-store');
-    response.setHeader('Allow', 'GET, HEAD');
+    response.setHeader('Allow', 'GET');
     response.status(405).json({ error: 'GET만 지원합니다.' });
     return;
   }
 
-  // 캐시 키는 디코딩 전의 원문 쿼리 문자열이므로 검증도 원문으로 한다. 디코딩 뒤에
-  // 검증하면 중복 키(route=3330&route=X)와 퍼센트 인코딩 변형(%72oute=3330)이 전부
-  // 같은 검증을 통과하면서 각각 새 캐시 키가 된다. 노선 이름이 URL 안전 문자뿐이라
-  // 정확 일치 비교가 가능하다.
-  const rawQuery = (request.url ?? '').split('?').slice(1).join('?');
-  const routeName = Object.keys(allowedRoutes).find((name) => rawQuery === `route=${name}`) ?? null;
+  // 캐시 키가 요청 URL 단위라, 같은 함수에 닿는 URL 변형 하나하나가 별개 캐시 엔트리로
+  // origin 호출을 만든다. 실측으로 확인된 변형은 중복 키(route=3330&route=X — 값마다
+  // 새 캐시 키)와 경로 변형(/api/live/, /api/live.ts — 각각 독립 캐시 키)이다. 퍼센트
+  // 인코딩은 플랫폼이 캐시 키와 함께 정규화해 핸들러에 오기 전에 접힌다.
+  // 그래서 경로와 쿼리를 원문 문자열 정확 일치로만 통과시킨다.
+  const requestUrl = request.url ?? '';
+  const questionMark = requestUrl.indexOf('?');
+  const rawPath = questionMark === -1 ? requestUrl : requestUrl.slice(0, questionMark);
+  const rawQuery = questionMark === -1 ? '' : requestUrl.slice(questionMark + 1);
+  const routeName = rawPath === '/api/live'
+    ? Object.keys(allowedRoutes).find((name) => rawQuery === `route=${name}`) ?? null
+    : null;
   if (routeName === null) {
     response.setHeader('Cache-Control', 'no-store');
     response.status(400).json({
-      error: '지원하지 않는 요청입니다. route 하나만 받습니다.',
+      error: '지원하지 않는 요청입니다. /api/live?route=<노선> 형식만 받습니다.',
       routes: Object.keys(allowedRoutes),
     });
     return;

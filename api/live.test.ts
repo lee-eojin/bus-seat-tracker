@@ -23,12 +23,14 @@ function fakeExchange(method: string, url: string) {
 }
 
 describe('/api/live 거부 경로', () => {
-  it('GET 외 메서드는 405와 no-store로 끊는다', async () => {
-    const { request, response, state } = fakeExchange('POST', '/api/live?route=3330');
-    await handler(request, response);
-    assert.equal(state.status, 405);
-    assert.equal(state.headers['Cache-Control'], 'no-store');
-    assert.equal(state.headers['Allow'], 'GET, HEAD');
+  it('GET 외 메서드는 405와 no-store로 끊는다 — HEAD도 캐시가 안 잡아 origin 직행이므로 포함', async () => {
+    for (const method of ['POST', 'HEAD', 'PUT', 'OPTIONS']) {
+      const { request, response, state } = fakeExchange(method, '/api/live?route=3330');
+      await handler(request, response);
+      assert.equal(state.status, 405, method);
+      assert.equal(state.headers['Cache-Control'], 'no-store', method);
+      assert.equal(state.headers['Allow'], 'GET', method);
+    }
   });
 
   it('여분의 쿼리 파라미터는 400이다 — 캐시 키 우회 차단', async () => {
@@ -47,11 +49,12 @@ describe('/api/live 거부 경로', () => {
     }
   });
 
-  it('퍼센트 인코딩 변형도 400이다', async () => {
-    for (const url of ['/api/live?%72oute=3330', '/api/live?route=%33330']) {
+  it('경로 변형은 400이다 — 뒤 슬래시와 .ts 접미사가 별개 캐시 키로 실측됨', async () => {
+    for (const url of ['/api/live/?route=3330', '/api/live.ts?route=3330', '/API/live?route=3330']) {
       const { request, response, state } = fakeExchange('GET', url);
       await handler(request, response);
       assert.equal(state.status, 400, url);
+      assert.equal(state.headers['Cache-Control'], 'no-store', url);
     }
   });
 
@@ -80,9 +83,4 @@ describe('/api/live 거부 경로', () => {
     assert.equal(state.status, 400);
   });
 
-  it('HEAD는 메서드 거부 없이 파라미터 검증으로 넘어간다', async () => {
-    const { request, response, state } = fakeExchange('HEAD', '/api/live?route=9999');
-    await handler(request, response);
-    assert.equal(state.status, 400);
-  });
 });
