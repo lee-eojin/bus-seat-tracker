@@ -189,6 +189,8 @@ jobs:
             let loopStartMs = Date.now();
             let loopEndMs = Date.now();
             let eventIntervalSeconds = null;
+            let oneShotMode = false;
+            let cycleSucceeded = false;
             const eventDuration = Number(process.env.EVENT_DURATION_MINUTES || '');
             if (eventDuration > 0) {
               loopEndMs = Date.now() + eventDuration * 60000;
@@ -201,7 +203,12 @@ jobs:
                 loopEndMs = window.endMs;
                 core.info(`창 수집: ${new Date(window.endMs).toISOString()}까지 기본 ${window.interval}초 간격, 조밀 구간은 창 설정을 따른다`);
               } else if (withinServiceHours(Date.now())) {
-                core.info('비피크: 1회 스냅샷만 수집');
+                // 단발 실행은 다음 사이클이 없다. 일시 오류 한 번이 그 시간대 전체 공백이
+                // 되지 않도록 3분 예산 안에서 재시도한다 (2026-08-01 타임아웃 1회 + 크론
+                // 스로틀 3시간이 겹쳐 7시간 공백이 난 사고).
+                oneShotMode = true;
+                loopEndMs = Date.now() + 3 * 60000;
+                core.info('비피크: 1회 스냅샷만 수집. 실패하면 45초 간격으로 재시도한다');
               } else {
                 core.info('심야 휴지: 이번 실행은 수집하지 않는다');
                 return;
@@ -277,6 +284,8 @@ jobs:
                 });
                 await uploadChangedFiles();
                 consecutiveFailures = 0;
+                cycleSucceeded = true;
+                if (oneShotMode) break;
               } catch (error) {
                 consecutiveFailures += 1;
                 // octokit HttpError의 status. execFileSync도 status(종료 코드)를 달지만 0~255라 겹치지 않는다.
@@ -294,9 +303,13 @@ jobs:
                 await sleep(loopStartMs - now);
                 continue;
               }
-              const intervalSeconds = eventIntervalSeconds ?? scheduledIntervalSeconds(now);
+              const intervalSeconds = oneShotMode ? 45 : (eventIntervalSeconds ?? scheduledIntervalSeconds(now));
               if (now + intervalSeconds * 1000 >= loopEndMs) break;
               await sleep(intervalSeconds * 1000);
             } while (Date.now() < loopEndMs);
 
-            if (abortReason) core.setFailed(abortReason);
+            if (abortReason) {
+              core.setFailed(abortReason);
+            } else if (oneShotMode && !cycleSucceeded) {
+              core.setFailed('단발 스냅샷이 재시도 포함 전부 실패했다. 이 시간대 관측이 비었고, 다음 크론이 스로틀로 몇 시간 뒤에 올 수 있다.');
+            }
