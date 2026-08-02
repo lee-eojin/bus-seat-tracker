@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -46,18 +46,33 @@ function resolveDataDirectory() {
   // 임시 디렉터리에 받는다. 프로젝트 상위(`../bus-data`)는 빌드 컨테이너에서 쓰기 가능하다는
   // 보장이 없고, 로컬에서는 같은 이름의 다른 디렉터리를 지울 위험이 있다.
   const checkout = path.join(mkdtempSync(path.join(os.tmpdir(), 'bus-data-')), 'repo');
-  // 토큰이 프로세스 목록·로그에 남지 않도록 URL이 아닌 헤더로 넘긴다.
-  const authorization = `Authorization: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`;
-  run('git', ['-c', `http.extraheader=${authorization}`, 'clone', '--quiet', '--depth', '1', `https://${dataRepository}`, checkout]);
+  // 토큰이 URL에도 argv에도 남지 않게 git 설정을 환경변수로 넘긴다. URL에 넣으면
+  // 에러 메시지와 원격 설정에, -c 인자로 넣으면 프로세스 목록과 실패 로그에 남는다.
+  const gitAuthEnvironment = {
+    ...process.env,
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'http.extraheader',
+    GIT_CONFIG_VALUE_0: `Authorization: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`,
+  };
+  run('git', ['clone', '--quiet', '--depth', '1', `https://${dataRepository}`, checkout], { env: gitAuthEnvironment });
 
   // 당일 수집 브랜치가 있으면 그쪽이 최신이다. 없으면 main(아카이브)만으로도 빌드된다.
+  // 브랜치 부재(정상 폴백)와 네트워크·권한 장애는 구분한다 — 장애까지 폴백으로 삼키면
+  // 낡은 데이터로 배포가 조용히 성공한다.
   const todayBranch = `collect/${seoulDate()}`;
-  try {
-    run('git', ['-c', `http.extraheader=${authorization}`, 'fetch', '--quiet', '--depth', '1', 'origin', todayBranch], { cwd: checkout });
+  const probe = spawnSync(
+    'git',
+    ['ls-remote', '--exit-code', '--heads', 'origin', todayBranch],
+    { cwd: checkout, env: gitAuthEnvironment, stdio: ['ignore', 'ignore', 'inherit'] },
+  );
+  if (probe.status === 0) {
+    run('git', ['fetch', '--quiet', '--depth', '1', 'origin', todayBranch], { cwd: checkout, env: gitAuthEnvironment });
     run('git', ['checkout', '--quiet', 'FETCH_HEAD'], { cwd: checkout });
     console.log(`데이터: ${todayBranch}`);
-  } catch {
+  } else if (probe.status === 2) {
     console.log('데이터: main (당일 수집 브랜치 없음)');
+  } else {
+    throw new Error(`데이터 저장소 조회 실패 (ls-remote 종료 ${probe.status ?? '신호 종료'}). 낡은 데이터로 배포하지 않는다.`);
   }
   return path.join(checkout, 'data');
 }
