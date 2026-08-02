@@ -32,6 +32,12 @@ Git은 2026-07-27에 연결했다. 연결하려면 Vercel 계정에 GitHub **로
 |---|---|---|
 | `GYEONGGI_BUS_API_KEY` | `api/live.ts` 런타임 | 프록시가 503, 화면은 스냅샷으로 표시 |
 | `BUS_DATA_REPO_TOKEN` | `scripts/build-site.mjs` 빌드 시 데이터 클론 | **빌드 실패** |
+| `DATABASE_URL` | `api/feedback.ts` 런타임 (Neon 연동이 자동 주입) | 설문·방문 기록이 503 |
+
+`DATABASE_URL`은 2026-07-29 Neon 연동이 Production·Preview에 자동 등록했다 (아래 "Preview에만
+있다" 문장은 위의 두 변수 얘기다). Vercel에서는 Sensitive라 재열람이 안 되므로 원본은 Neon
+콘솔(프로젝트 → Connection Details)이다. 재방문 집계(`npm run retention`)를 로컬에서 돌릴 때
+여기서 가져온다.
 
 Production·Preview 양쪽에 등록한다. Preview에 없으면 브랜치 프리뷰 빌드가 깨진다.
 2026-07-27 기준 **Preview에만 있고 Production에는 없다.**

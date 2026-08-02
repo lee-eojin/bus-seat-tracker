@@ -16,7 +16,8 @@
     "queue": "npm run build && node dist/backtest/queue-recovery.js",
     "test": "npm run build && node --test \"dist/**/*.test.js\"",
     "budget": "npm run build && node scripts/call-budget.mjs",
-    "build:site": "node scripts/build-site.mjs"
+    "build:site": "node scripts/build-site.mjs",
+    "retention": "node scripts/retention.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
