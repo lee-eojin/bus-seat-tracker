@@ -1,6 +1,6 @@
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { observationsByVehicle, type VehicleObservation } from '../shared/profile.js';
 import { expectedSnapshotGapSeconds, serviceElapsedMs } from '../bus-seat-collector/schedule.js';
 import { loadSnapshots } from './data-source.js';
@@ -28,13 +28,20 @@ const matchWindowMs = 90 * 60_000;
 //
 // 여유 30분은 발행이 데이터를 클론한 뒤 예측을 만드는 사이에 새 스냅샷이 착지하는
 // 경합을 흡수한다.
-const publishFreshnessAllowanceMs = 30 * 60_000;
+export const publishFreshnessAllowanceMs = 30 * 60_000;
+
+/** 발행이 그 시점의 최신 관측 대신 낡은 근거를 썼는가. 운행 시간 밖 발행은 묻지 않는다. */
+export function staleBasisAt(publishedMs: number, basisMs: number, latestAvailableMs: number | null): boolean {
+  if (expectedSnapshotGapSeconds(publishedMs) === null) return false;
+  if (latestAvailableMs === null) return false;
+  return latestAvailableMs - basisMs > publishFreshnessAllowanceMs;
+}
 
 // 수집 공백 허용치. 관측 사이 간격(운행 시간만 합산)이 그 구간에서 기대되는 수집
 // 간격의 두 배 + 15분을 넘으면 공백이다. 한 사이클 결손까지는 정상으로 본다.
 // 구간이 가로지르는 시대 중 가장 성긴 것을 기준으로 잡아야 심야·조밀 경계에서
 // 오탐이 없다.
-function gapToleranceMs(fromMs: number, toMs: number): number | null {
+export function gapToleranceMs(fromMs: number, toMs: number): number | null {
   let sparsestGapSeconds: number | null = null;
   for (let cursor = fromMs; cursor <= toMs; cursor += 60_000) {
     const gap = expectedSnapshotGapSeconds(cursor);
@@ -44,7 +51,7 @@ function gapToleranceMs(fromMs: number, toMs: number): number | null {
   return sparsestGapSeconds * 2 * 1000 + 15 * 60_000;
 }
 
-function latestObservationAt(sortedTimes: number[], atMs: number): number | null {
+export function latestObservationAt(sortedTimes: number[], atMs: number): number | null {
   let low = 0;
   let high = sortedTimes.length - 1;
   let found = -1;
@@ -202,10 +209,8 @@ async function main(): Promise<void> {
       unknownBasis += 1;
     } else {
       const predictedAt = Date.parse(row.at);
-      if (expectedSnapshotGapSeconds(predictedAt) !== null) {
-        const latestAvailable = latestObservationAt(observationTimesByRoute.get(row.route) ?? [], predictedAt);
-        if (latestAvailable !== null && latestAvailable - (predictedAt - age) > publishFreshnessAllowanceMs) staleBasis += 1;
-      }
+      const latestAvailable = latestObservationAt(observationTimesByRoute.get(row.route) ?? [], predictedAt);
+      if (staleBasisAt(predictedAt, predictedAt - age, latestAvailable)) staleBasis += 1;
     }
     if (!actual) {
       unmatched += 1;
@@ -292,7 +297,10 @@ function toSeoulParts(): string {
   return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
-main().catch((error: unknown) => {
-  console.error(`라이브 예측 채점 실패: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+// 직접 실행일 때만 채점을 돌린다. 테스트가 정책 함수를 임포트할 때 부수 효과가 없어야 한다.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error: unknown) => {
+    console.error(`라이브 예측 채점 실패: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}
