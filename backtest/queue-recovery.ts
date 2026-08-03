@@ -39,6 +39,8 @@ interface Options {
   correct: boolean;
   includeWeekend: boolean;
   allStops: boolean;
+  byDay: boolean;
+  since: string | null;
   verdict: boolean;
   jsonPath: string | null;
 }
@@ -54,6 +56,8 @@ function readArguments(argumentsList: string[]): Options {
     correct: true,
     includeWeekend: false,
     allStops: false,
+    byDay: false,
+    since: null,
     verdict: false,
     jsonPath: null,
   };
@@ -68,6 +72,8 @@ function readArguments(argumentsList: string[]): Options {
     if (name === '--no-correct') options.correct = false;
     if (name === '--include-weekend') options.includeWeekend = true;
     if (name === '--all-stops') options.allStops = true;
+    if (name === '--by-day') options.byDay = true;
+    if (name === '--since' && value) options.since = value;
     if (name === '--verdict') options.verdict = true;
     if (name === '--json' && value) options.jsonPath = path.resolve(value);
   }
@@ -272,6 +278,7 @@ async function main(): Promise<void> {
   const snapshots = await loadSnapshots(options.dataDirectory, options.routeName);
   const dates = [...new Set(snapshots.map((snapshot) => toSeoulBucket(snapshot.collectedAt).date))].sort()
     .filter((date) => {
+      if (options.since && date < options.since) return false;
       if (options.includeWeekend) return true;
       const day = new Date(`${date}T12:00:00+09:00`).getUTCDay();
       return day !== 0 && day !== 6;
@@ -285,6 +292,92 @@ async function main(): Promise<void> {
       runs.push(...splitRuns(observations));
     }
     runsByDate.set(date, runs);
+  }
+
+  if (options.allStops && options.byDay) {
+    // 정류장×날짜 λ. 날짜 간 분산 측정이 예측기 승격의 선결 조건이다 (docs/04-queue-recovery.md §16).
+    // 하루 표본이 너무 얇으면(짧은 구간 한두 개) 그날 λ가 노이즈라, 구간 합계가 이 분을
+    // 넘는 날만 날짜 표본으로 인정한다.
+    const dayMinimumMinutes = 15;
+    console.log('\n' + '═'.repeat(104));
+    console.log(`정류장×날짜 λ — 날짜 간 분산 (하루 구간 합계 ${dayMinimumMinutes}분 이상인 날만 · 변동계수는 표본 기준 n−1)`);
+    console.log('═'.repeat(104));
+    console.log('주의: 이 모드는 §8 상류 오염 보정을 적용하지 않는다. 상류 대체가 섞인 정류장의 λ에는');
+    console.log('상류 정류장 승차가 귀속되므로, 직독/상류대체 열로 오염도를 가려 읽어야 한다.');
+    console.log('\n  seq  정류장                      일수  일별 λ                              평균    표준편차  변동계수  합동λ  직독/상류대체');
+    const stopRows: Array<{
+      sequence: number;
+      name: string;
+      pooledLambda: number;
+      days: Array<{ date: string; boarding: number; minutes: number; intervals: number; lambda: number }>;
+      thinDays: number;
+      direct: number;
+      viaPassThrough: number;
+      mean: number;
+      sampleSd: number;
+      sampleCv: number | null;
+    }> = [];
+    for (const stop of cache.stops) {
+      if (isNonBoardingStop(stop.name)) continue;
+      const stopOptions = { ...options, stopSequence: stop.sequence };
+      const through = passThroughAfter(cache, stop.sequence);
+      const days: Array<{ date: string; boarding: number; minutes: number; intervals: number; lambda: number }> = [];
+      let thinDays = 0;
+      let pooledBoarding = 0;
+      let pooledMinutes = 0;
+      let direct = 0;
+      let viaPassThrough = 0;
+      for (const date of dates) {
+        const dayPasses = passesForDay(runsByDate.get(date)!, stopOptions, through, null);
+        direct += dayPasses.direct;
+        viaPassThrough += dayPasses.viaPassThrough;
+        let boarding = 0;
+        let minutes = 0;
+        let intervals = 0;
+        for (const interval of intervalsOf(dayPasses.passes)) {
+          boarding += interval.boarding;
+          minutes += interval.minutes;
+          intervals += 1;
+        }
+        if (intervals === 0) continue;
+        pooledBoarding += boarding;
+        pooledMinutes += minutes;
+        if (minutes < dayMinimumMinutes) {
+          thinDays += 1;
+          continue;
+        }
+        days.push({ date, boarding, minutes, intervals, lambda: boarding / minutes });
+      }
+      if (days.length < 2) continue;
+      // 미래 날짜로 일반화하는 용도라 모집단(n)이 아니라 표본(n−1) 분산을 쓴다.
+      const lambdas = days.map((day) => day.lambda);
+      const mean = lambdas.reduce((sum, value) => sum + value, 0) / lambdas.length;
+      const sampleSd = Math.sqrt(lambdas.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (lambdas.length - 1));
+      stopRows.push({
+        sequence: stop.sequence,
+        name: stop.name ?? '?',
+        pooledLambda: pooledMinutes > 0 ? pooledBoarding / pooledMinutes : 0,
+        days,
+        thinDays,
+        direct,
+        viaPassThrough,
+        mean,
+        sampleSd,
+        sampleCv: mean === 0 ? null : sampleSd / mean,
+      });
+    }
+    for (const row of stopRows.sort((left, right) => right.mean - left.mean)) {
+      const perDay = row.days.map((day) => `${day.date.slice(5)}:${day.lambda.toFixed(2)}`).join(' ');
+      console.log(
+        `  ${String(row.sequence).padStart(3)}  ${row.name.slice(0, 24).padEnd(26)}${String(row.days.length).padStart(4)}  ${perDay.padEnd(36)}${row.mean.toFixed(2).padStart(6)}${row.sampleSd.toFixed(2).padStart(10)}${(row.sampleCv === null ? '—' : row.sampleCv.toFixed(2)).padStart(10)}${row.pooledLambda.toFixed(2).padStart(8)}  ${row.direct}/${row.viaPassThrough}`,
+      );
+    }
+    console.log(`\n  날짜 2일 이상 잡힌 정류장 ${stopRows.length}곳 · 대상 날짜 ${dates.join(', ')}`);
+    if (options.jsonPath) {
+      await writeFile(options.jsonPath, `${JSON.stringify({ generatedAt: new Date().toISOString(), route: options.routeName, dates, window: { fromHour: options.fromHour, toHour: options.toHour }, dayMinimumMinutes, stops: stopRows }, null, 2)}\n`);
+      console.log(`\n결과 저장: ${options.jsonPath}`);
+    }
+    return;
   }
 
   if (options.allStops) {
