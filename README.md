@@ -121,11 +121,6 @@ python3 -m http.server 8000 --directory site
 
 ## 문서
 
-[문서 안내](docs/README.md)는 목적에 따라 읽을 순서를 나눈다.
+문서는 [docs/README.md](docs/README.md)부터 읽는다. 화면이 무엇을 답하는지, 그 숫자가 어디서 오는지를 먼저 설명하고 하려는 일에 따라 어디로 갈지 세 갈래로 나눈다.
 
-- 제품 문제와 검증: [제품 개요](docs/product/overview.md), [문제 검증](docs/product/problem-validation.md)
-- 현재 모델: [수학 입문서](docs/model/mathematical-primer.md), [개념 안내](docs/model/concepts.md), [좌석 예보](docs/model/seat-forecast.md), [탑승 판정](docs/model/boarding-verdict.md), [대기 범위](docs/model/queue-estimation.md)
-- 구조와 운영: [아키텍처](docs/architecture.md), [배포](docs/operations/deployment.md), [수집기 운영](docs/operations/collector.md)
-- 실험 근거: [연구 기록](docs/research/)
-
-폐기된 설계와 이전 작업 일지는 `docs/archive/`에 보관한다. 현재 동작을 확인할 때는 보관 문서를 근거로 쓰지 않는다.
+전체 목록과 디렉터리별 역할은 [문서 지도](docs/map.md)에, 폐기된 설계와 이전 작업 일지는 [보관 문서](docs/archive/README.md)에 있다. 현재 동작을 확인할 때는 보관 문서를 근거로 쓰지 않는다.
