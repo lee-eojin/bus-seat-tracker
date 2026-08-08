@@ -540,6 +540,27 @@ function renderDestinationChip(): void {
   }
 }
 
+// render()가 이 파일의 초기화 도중에도 불리므로 상수는 쓰는 자리 위에 둔다.
+// 아래쪽에 두면 시간적 사각지대에 걸려 첫 렌더가 통째로 죽는다.
+const surveySubmittedKey = 'bus-survey-submitted';
+const inviteClickedKey = 'bus-invite-clicked';
+
+/** 쿠키를 막은 사파리에서는 localStorage 접근 자체가 던진다. 표시 판단이 화면을 죽이면 안 된다. */
+function hasFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) !== null;
+  } catch {
+    return false;
+  }
+}
+
+function renderSurveyInvite(): void {
+  // 이미 답을 준 사람에게 같은 부탁을 계속 하면 화면만 차지한다. 구글폼 쪽 제출 여부는
+  // 알 수 없으므로 배너를 눌렀다는 사실을 대신 쓴다.
+  getElement<HTMLAnchorElement>('survey-invite').hidden =
+    hasFlag(surveySubmittedKey) || hasFlag(inviteClickedKey);
+}
+
 function phase0ObservationCount(): number {
   try {
     const raw = localStorage.getItem('phase0-observations');
@@ -993,12 +1014,15 @@ function renderAxis(route: LatestRoute, frame: BoardFrame): void {
 
 function render(): void {
   const state = boardState();
-  const needsDestination = state.kind === 'ready' && destination === null;
+  // 도착지는 좌석 판정에 쓰이지 않는다. 정류장에서 목적지까지의 길찾기 링크 하나를 위한
+  // 값이라 답을 막을 이유가 없다. 예전에는 이 값이 없으면 보드 전체를 숨겨서, QR로 들어와
+  // 노선과 방향과 내 정류장이 이미 채워진 사람조차 답 대신 입력창을 봤다.
   getElement<HTMLDivElement>('setup').classList.toggle('show', state.kind === 'empty');
-  getElement<HTMLDivElement>('destination-screen').classList.toggle('show', needsDestination);
-  getElement<HTMLDivElement>('board').classList.toggle('show', state.kind === 'ready' && !needsDestination);
+  getElement<HTMLDivElement>('destination-screen').classList.toggle('show', state.kind === 'ready' && destination === null);
+  getElement<HTMLDivElement>('board').classList.toggle('show', state.kind === 'ready');
   renderDestinationChip();
-  if (state.kind === 'empty' || needsDestination) return;
+  renderSurveyInvite();
+  if (state.kind === 'empty') return;
 
   const payload = latestPayload();
   if (!payload) return;
@@ -1235,7 +1259,12 @@ recordVisit();
 // ── 현장 설문 ──
 // 관측은 버스 쪽에서 세었지 사람 쪽에서 세지 않았다. 한 사람이 얼마나 자주 보내는지는
 // 여기서만 나온다 (docs/product/problem-validation.md의 판교역 현장 설문).
-const surveySubmittedKey = 'bus-survey-submitted';
+// 구글폼으로 나가면 돌아왔을 때 제출 여부를 알 수 없다. 눌렀다는 것만 남겨 두 번 조르지 않는다.
+getElement<HTMLAnchorElement>('survey-invite').addEventListener('click', () => {
+  try {
+    localStorage.setItem(inviteClickedKey, new Date().toISOString());
+  } catch { /* 저장이 막혀도 이동은 막지 않는다 */ }
+});
 
 function showSurvey(): void {
   getElement<HTMLElement>('survey').classList.add('show');
