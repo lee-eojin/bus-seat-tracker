@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { readUpstreamErrorEnvelope } from '../../../packages/domain/src/model.js';
+import { readGbisResultError, readUpstreamErrorEnvelope } from '../../../packages/domain/src/model.js';
 import {
   classifyFailure,
   describeFailure,
   failureChain,
-  readResultNotice,
   toSingleCause,
   UpstreamFailure,
 } from './failure-kind.js';
@@ -202,17 +201,62 @@ describe('여러 실패 묶기', () => {
   });
 });
 
-describe('GBIS 결과 코드 기록', () => {
-  it('0이 아닌 결과 코드를 기록용으로 돌려준다', () => {
-    assert.deepEqual(
-      readResultNotice({ response: { msgHeader: { resultCode: 4, resultMessage: '결과가 없습니다.' } } }),
-      { code: '4', message: '결과가 없습니다.' },
-    );
+describe('GBIS 결과 코드 판정', () => {
+  // 명세: 0 정상, 1 시스템 에러, 2 필수 파라미터 누락, 4 결과 없음.
+  it('0과 4는 정상이다', () => {
+    assert.equal(readGbisResultError({ response: { msgHeader: { resultCode: 0 } } }), null);
+    assert.equal(readGbisResultError({ response: { msgHeader: { resultCode: '0' } } }), null);
+    assert.equal(readGbisResultError({ response: { msgHeader: { resultCode: 4, resultMessage: '결과가 존재하지 않습니다.' } } }), null);
   });
 
-  it('정상 코드와 헤더 없음은 null이다', () => {
-    assert.equal(readResultNotice({ response: { msgHeader: { resultCode: 0 } } }), null);
-    assert.equal(readResultNotice({ response: { msgHeader: { resultCode: '0' } } }), null);
-    assert.equal(readResultNotice({ response: { msgBody: {} } }), null);
+  it('시스템 에러와 파라미터 누락은 오류다', () => {
+    assert.deepEqual(
+      readGbisResultError({ response: { msgHeader: { resultCode: 1, resultMessage: '시스템 에러가 발생하였습니다.' } } }),
+      { code: '1', message: '시스템 에러가 발생하였습니다.' },
+    );
+    assert.equal(readGbisResultError({ response: { msgHeader: { resultCode: 2 } } })?.code, '2');
+  });
+
+  it('헤더가 없으면 판단하지 않는다', () => {
+    assert.equal(readGbisResultError({ response: { msgBody: {} } }), null);
+  });
+
+  it('시스템 에러는 저절로 낫고 파라미터 누락은 사람이 손대야 한다', () => {
+    const gbis = (code: string) => new UpstreamFailure('상류 결과 코드', { httpStatus: 200, upstreamCode: code, codeSpace: 'gbis' });
+    assert.equal(classifyFailure(gbis('1')), 'transient');
+    assert.equal(classifyFailure(gbis('2')), 'actionable');
+  });
+
+  it('두 코드 체계를 섞어 읽지 않는다', () => {
+    // 포털 표의 01은 일시적이지만 GBIS 표의 1과 다른 값이다. 공간을 무시하면 오판한다.
+    const portal = new UpstreamFailure('포털 오류', { httpStatus: 200, upstreamCode: '23' });
+    const gbis = new UpstreamFailure('GBIS 오류', { httpStatus: 200, upstreamCode: '23', codeSpace: 'gbis' });
+    assert.equal(classifyFailure(portal), 'transient');
+    assert.equal(classifyFailure(gbis), 'actionable');
+  });
+});
+
+describe('껍데기와 형제 구분', () => {
+  const timeout = () => new TypeError('fetch failed', { cause: withCode('Connect Timeout Error', 'UND_ERR_CONNECT_TIMEOUT') });
+
+  it('바깥의 평범한 Error는 문맥일 뿐이라 안쪽 원인이 판정한다', () => {
+    assert.equal(classifyFailure(new Error('수집할 노선을 하나도 확인하지 못했습니다', { cause: timeout() })), 'transient');
+  });
+
+  it('형제 중 하나라도 모르는 실패면 사람이 손대야 한다', () => {
+    const unknown = new Error('정류장 목록이 비어 있습니다');
+    assert.equal(classifyFailure(new AggregateError([timeout(), unknown], '2개 실패')), 'actionable');
+    assert.equal(classifyFailure(new AggregateError([unknown, timeout()], '2개 실패')), 'actionable');
+  });
+
+  it('형제가 전부 저절로 낫는 실패면 그대로 둔다', () => {
+    assert.equal(classifyFailure(new AggregateError([timeout(), timeout()], '2개 실패')), 'transient');
+  });
+
+  it('껍데기가 형제를 감싸도 형제 규칙이 이긴다', () => {
+    const wrapped = new Error('노선을 하나도 확인하지 못했습니다', {
+      cause: new AggregateError([timeout(), new Error('모르는 실패')], '2개 실패'),
+    });
+    assert.equal(classifyFailure(wrapped), 'actionable');
   });
 });

@@ -9,28 +9,33 @@
 // 분류는 화이트리스트다. 자가 치유가 확실한 갈래만 transient로 내리고 나머지는 전부
 // actionable로 둔다. 모르는 실패를 조용히 만들면 키가 죽은 날 아무도 모른다.
 
-import { isRecord, readIdentifier } from '../../../packages/domain/src/model.js';
 
 export type FailureKind = 'transient' | 'actionable';
 
 /** 수집기가 자가 치유되는 실패로 끝날 때 쓰는 종료 코드. 워크플로가 이 값으로 경고와 실패를 가른다. */
 export const transientExitCode = 10;
 
+/** 상류 코드가 어느 표에서 왔는지. 두 체계는 숫자가 겹치므로 섞어 읽으면 안 된다. */
+export type CodeSpace = 'portal' | 'gbis';
+
 interface UpstreamFailureOptions extends ErrorOptions {
   httpStatus?: number | null;
   upstreamCode?: string | null;
+  codeSpace?: CodeSpace;
 }
 
 /** 상류(GBIS) 호출이 만든 실패. httpStatus가 null이면 응답 자체를 받지 못한 것이다. */
 export class UpstreamFailure extends Error {
   readonly httpStatus: number | null;
   readonly upstreamCode: string | null;
+  readonly codeSpace: CodeSpace;
 
   constructor(message: string, options: UpstreamFailureOptions = {}) {
     super(message, options);
     this.name = 'UpstreamFailure';
     this.httpStatus = options.httpStatus ?? null;
     this.upstreamCode = options.upstreamCode ?? null;
+    this.codeSpace = options.codeSpace ?? 'portal';
   }
 }
 
@@ -69,9 +74,13 @@ const actionableUpstreamMarkers = [
 ];
 
 // 공공데이터포털 공통 오류표에서 저절로 낫는 코드.
-// 01 게이트웨이 내부 오류, 05 연결 실패·응답 대기 초과, 23 초당 호출 허용량 초과.
+// 01 게이트웨이 내부 오류, 05 연결 실패와 응답 대기 초과, 23 초당 호출 허용량 초과.
 // 22(일일 호출 허용량)는 자정까지 안 낫고 구속 제약을 건드렸다는 설계 신호라 여기 없다.
-const transientUpstreamCodes = new Set(['01', '05', '23']);
+const transientPortalCodes = new Set(['01', '05', '23']);
+
+// GBIS 자체 코드표에서 저절로 낫는 코드. 1은 상류 내부 시스템 오류라 다음 사이클에 다시 해본다.
+// 2(필수 파라미터 누락)는 우리 요청이 틀렸다는 뜻이라 사람이 봐야 한다.
+const transientGbisCodes = new Set(['1']);
 
 function errorCode(error: Error): string | null {
   const code = (error as { code?: unknown }).code;
@@ -118,21 +127,43 @@ export function describeFailure(error: unknown): string {
     .join(' ← ');
 }
 
+/** cause만 따라간다. AggregateError의 형제는 펼치지 않는다. */
+function causeChain(error: unknown): Error[] {
+  const chain: Error[] = [];
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current);
+    chain.push(current);
+    current = current.cause;
+  }
+  return chain;
+}
+
 /**
  * 화이트리스트에 걸리는 것만 transient다. 모르는 실패는 전부 actionable로 남긴다.
- * 사람이 손대야 하는 신호가 하나라도 있으면 그쪽이 이긴다.
+ *
+ * 껍데기와 형제를 다르게 본다. cause 체인의 바깥 오류는 문맥을 붙이는 껍데기라
+ * ("수집할 노선을 하나도 확인하지 못했습니다") 그 자체로는 신호가 아니고, 안쪽 원인이 판정한다.
+ * 반면 AggregateError의 형제는 각각 독립된 실패라 하나라도 사람이 손대야 하면 그쪽이 이긴다.
+ * 노선 하나가 연결 타임아웃이고 다른 하나가 진짜 문제일 때 순서로 판정이 갈리면 안 된다.
  */
 export function classifyFailure(error: unknown): FailureKind {
-  const chain = failureChain(error);
   let transient = false;
 
-  for (const link of chain) {
+  for (const link of causeChain(error)) {
+    if (link instanceof AggregateError && link.errors.length > 0) {
+      if (link.errors.some((branch) => classifyFailure(branch) === 'actionable')) return 'actionable';
+      transient = true;
+      continue;
+    }
     if (link instanceof UpstreamFailure) {
       // 코드는 숫자일 수 있고 사람이 읽을 문구는 메시지에 있다. 둘 다 본다.
       const haystack = `${link.upstreamCode ?? ''} ${link.message}`.toUpperCase();
       if (actionableUpstreamMarkers.some((marker) => haystack.includes(marker.toUpperCase()))) return 'actionable';
       if (link.httpStatus === 401 || link.httpStatus === 403) return 'actionable';
-      if (link.upstreamCode !== null && transientUpstreamCodes.has(link.upstreamCode)) transient = true;
+      const transientCodes = link.codeSpace === 'gbis' ? transientGbisCodes : transientPortalCodes;
+      if (link.upstreamCode !== null && transientCodes.has(link.upstreamCode)) transient = true;
       if (link.httpStatus === 429 || (link.httpStatus !== null && link.httpStatus >= 500)) transient = true;
       continue;
     }
@@ -142,35 +173,4 @@ export function classifyFailure(error: unknown): FailureKind {
   }
 
   return transient ? 'transient' : 'actionable';
-}
-
-export interface UpstreamStatus {
-  code: string;
-  message: string;
-}
-
-/**
- * GBIS 자체 헤더가 0이 아닌 결과 코드를 냈을 때 그 값을 돌려준다.
- *
- * 이 코드 체계는 포털 공통 코드표와 별개이고 실측 픽스처가 없다. 오류로 단정하면 정상적인
- * 무데이터 응답(명세상 4가 "결과 없음")에서 수집이 죽고, 무시하면 200에 담긴 오류를 놓친다.
- * 그래서 판정하지 않고 기록만 남긴다. 실제 값이 로그에 찍히면 그때 판정으로 올린다.
- * 키·한도 오류는 포털 오류 봉투로 오므로 이 경로가 아니어도 잡힌다.
- */
-export function readResultNotice(payload: unknown): UpstreamStatus | null {
-  if (!isRecord(payload)) return null;
-  const response = isRecord(payload.response) ? payload.response : null;
-  const header = response && isRecord(response.msgHeader)
-    ? response.msgHeader
-    : isRecord(payload.msgHeader)
-      ? payload.msgHeader
-      : null;
-  if (!header) return null;
-
-  const rawCode = header.resultCode;
-  if (rawCode === undefined || rawCode === null) return null;
-  const code = String(rawCode).trim();
-  if (code === '' || Number(code) === 0) return null;
-
-  return { code, message: readIdentifier(header.resultMessage) ?? readIdentifier(header.resultMsg) ?? '' };
 }
