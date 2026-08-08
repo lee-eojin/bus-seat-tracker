@@ -198,7 +198,7 @@ Protection이 켜진 상태다. 공개 서비스가 목표라면 Vercel 대시�
 
 1. 소비자를 적는다. Actions의 `BUS_DATA_REPO_TOKEN`은 수집, 발행, 예보 검증 세 곳이 함께 쓴다.
    Vercel의 같은 이름은 빌드만 쓴다.
-2. Actions에는 읽기와 쓰기 토큰을, Vercel에는 읽기 전용 토큰을 각각 만든다.
+2. Actions에는 읽기와 쓰기 권한을 함께 가진 토큰을, Vercel에는 읽기 전용 토큰을 각각 만든다.
 3. GitHub Secret을 바꾼 뒤 **Collect bus seats**, **Publish seat board**, **Verify forecast**를
    수동 실행해 비공개 저장소 읽기와 쓰기를 모두 확인한다.
 4. Vercel 환경변수를 바꾸고 새 배포를 시작한다. 빌드 로그에서 당일 브랜치 또는 `main`을

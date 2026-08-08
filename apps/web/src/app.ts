@@ -300,7 +300,7 @@ function probabilityPhrase(cell: HistoryBucket): string {
 function recommendationText(recommendation: BoardingRecommendation): string {
   switch (recommendation.kind) {
     case 'unset': return '정류장의 길찾기를 눌러 "이 정류장에서 타요"를 선택하면 추천이 시작됩니다.';
-    case 'elsewhere': return '내 정류장이 이 노선의 이 방향에 없습니다. 노선이나 방향을 바꿔보세요.';
+    case 'elsewhere': return '내 정류장이 이 노선과 방향에 없습니다. 노선이나 방향을 바꿔보세요.';
     case 'insufficient': return `데이터 부족: 이 시간대 관측 ${recommendation.samples}회 (기준 ${recommendationMinSamples}회). 수집이 쌓이면 자동으로 추천이 켜집니다.`;
     case 'stay': return `여기서 기다리세요. 이 시간대 ${probabilityPhrase(recommendation.cell)}.`;
     case 'move': return `${recommendation.hops}정거장 앞 ${recommendation.target.name ?? `정류장 ${recommendation.target.sequence}`}에서 타세요. 내 정류장 ${probabilityPhrase(recommendation.myCell)}, 그곳은 탑승 확률 ${percent(nonFullObservationRate(recommendation.targetCell))}% (관측 ${recommendation.targetCell.samples}회).`;
@@ -682,7 +682,7 @@ function renderConclusion(route: LatestRoute, frame: BoardFrame): void {
     headlineText = '노선 데이터를 못 받았어요';
     infoLines.push(['ccl-why', '연결을 확인하고 새로고침해 주세요. 실시간 좌석은 아래에서 그대로 볼 수 있어요.']);
   } else if (recommendation.kind === 'elsewhere') {
-    headlineText = '이 노선의 이 방향에 내 정류장이 없어요';
+    headlineText = '이 노선과 방향에 내 정류장이 없어요';
     infoLines.push(['ccl-why', '노선이나 방향을 바꾸거나, 아래에서 정류장을 다시 골라 주세요.']);
   } else if (recommendation.kind === 'insufficient') {
     headlineText = '아직 판정할 표본이 부족해요';
