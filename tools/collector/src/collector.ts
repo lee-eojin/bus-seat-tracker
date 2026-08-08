@@ -307,7 +307,7 @@ function warnIfNonBoardingMarkersVanished(routeName: string, previous: RouteCach
   if (before > 0 && after === 0) {
     console.warn(
       `${routeName}번의 승차 불가 지점이 ${before}곳에서 0곳이 됐습니다. ` +
-      `표기가 바뀌었을 수 있습니다 — packages/domain/src/model.ts의 nonBoardingMarkers를 확인하세요.`,
+      `표기가 바뀌었을 수 있습니다. packages/domain/src/model.ts의 nonBoardingMarkers를 확인하세요.`,
     );
     return;
   }
@@ -380,7 +380,7 @@ async function appendSnapshot(snapshot: Snapshot): Promise<void> {
 
 async function collectOnce(routes: Route[], apiKey: string, hashSecret: string): Promise<void> {
   // 한 노선의 실패가 다른 노선의 성공분까지 버리면 호출만 소비된다. 성공분은 저장하고
-  // 전부 실패했을 때만 사이클 실패로 던진다 — 부분 실패의 공백은 검증 워크플로의
+  // 전부 실패했을 때만 사이클 실패로 던진다. 부분 실패의 공백은 검증 워크플로의
   // 노선별 수집 공백 경고가 잡는다.
   const results = await Promise.allSettled(routes.map((route) => fetchVehicleSnapshot(route, apiKey, hashSecret)));
   const snapshots = results
@@ -389,7 +389,7 @@ async function collectOnce(routes: Route[], apiKey: string, hashSecret: string):
   await Promise.all(snapshots.map(appendSnapshot));
 
   const vehicleCount = snapshots.reduce((count, snapshot) => count + snapshot.vehicles.length, 0);
-  console.log(`${new Date().toLocaleTimeString('ko-KR')} · ${snapshots.length}개 노선, 운행 차량 ${vehicleCount}대 저장`);
+  console.log(`${new Date().toLocaleTimeString('ko-KR')} ${snapshots.length}개 노선, 운행 차량 ${vehicleCount}대 저장`);
 
   // 실패는 성공분을 저장한 뒤에 던진다. 삼키면 워크플로의 단발 재시도와 3연속 실패
   // 알림이 부분 실패를 영영 못 보고, 던지기 전에 저장하지 않으면 성공한 호출이 버려진다.

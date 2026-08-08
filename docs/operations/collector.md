@@ -1,6 +1,6 @@
 # 수집기 운영 가이드
 
-수집기는 3330번과 1650번 버스의 위치·잔여석을 GBIS에서 읽어 비공개 저장소에 JSONL로
+수집기는 3330번과 1650번 버스의 위치와 잔여석을 GBIS에서 읽어 비공개 저장소에 JSONL로
 쌓는다. GitHub Actions의 예약 실행은 수집을 시작하는 신호만 맡고, 1분 단위 관측이 필요한
 시간에는 하나의 잡이 창이 끝날 때까지 반복한다. GitHub 예약 실행이 몇 시간 늦어질 수 있다는
 실측 때문에 이렇게 나눴다.
@@ -20,7 +20,7 @@
 |---|---|
 | 예약 실행과 새 러너 재시도 | [`.github/workflows/collect-bus-seats.yml`](../../.github/workflows/collect-bus-seats.yml) |
 | 수집 한 판 (보관, 브랜치 준비, 수집 루프) | [`.github/workflows/collect-cycle.yml`](../../.github/workflows/collect-cycle.yml) |
-| 시간대·간격·운행 시간 판정 | [`tools/collector/src/schedule.ts`](../../tools/collector/src/schedule.ts) |
+| 시간대, 간격, 운행 시간 판정 | [`tools/collector/src/schedule.ts`](../../tools/collector/src/schedule.ts) |
 | GBIS 호출, 노선 캐시, JSONL 저장 | [`tools/collector/src/collector.ts`](../../tools/collector/src/collector.ts) |
 | 호출 수 계산 | [`tools/collector/scripts/call-budget.mjs`](../../tools/collector/scripts/call-budget.mjs) |
 | 발행 | [`.github/workflows/publish-pages.yml`](../../.github/workflows/publish-pages.yml) |
@@ -33,7 +33,7 @@
 
 ```text
 공개 bus-seat-tracker
-  ├─ 수집·집계 코드
+  ├─ 수집과 집계 코드
   ├─ 차량 ID를 제거한 정적 집계
   └─ 차량 번호와 ID를 제거한 /api/live 응답
 
@@ -52,9 +52,9 @@ ID도 `null`로 지운다. 라이브 예측 원문도 같은 가명 ID를 쓰기
 
 | 이름 | 용도 | 관리 원칙 |
 |---|---|---|
-| `GYEONGGI_BUS_API_KEY` | GBIS 노선·위치 조회 | 포털 키 원문을 로그나 문서에 남기지 않는다 |
-| `VEHICLE_HASH_SECRET` | 차량 번호·ID의 HMAC 키 | API 키와 다른 긴 임의값을 쓴다 |
-| `BUS_DATA_REPO_TOKEN` | 비공개 데이터 저장소 읽기·쓰기 | 해당 저장소의 Contents 권한만 준다 |
+| `GYEONGGI_BUS_API_KEY` | GBIS 노선과 위치 조회 | 포털 키 원문을 로그나 문서에 남기지 않는다 |
+| `VEHICLE_HASH_SECRET` | 차량 번호와 ID의 HMAC 키 | API 키와 다른 긴 임의값을 쓴다 |
+| `BUS_DATA_REPO_TOKEN` | 비공개 데이터 저장소 읽기와 쓰기 | 해당 저장소의 Contents 권한만 준다 |
 
 `VEHICLE_HASH_SECRET`은 평상시 API 키 교체와 함께 바꾸지 않는다. 이 값이 바뀌면 같은 차량의
 가명 ID가 전후 기간에 이어지지 않아 운행 추적과 라이브 예측 채점이 끊긴다. 유출이 의심되면
@@ -104,7 +104,7 @@ npm run collect -- --once --refresh-routes
 
 모든 시각은 KST다. 아래 표는 `schedule.ts`의 현재 상수를 풀어 썼다.
 
-| 요일·시간 | 간격 | 실행 방식 |
+| 요일과 시간 | 간격 | 실행 방식 |
 |---|---:|---|
 | 평일 05:00~06:29 | 매시 1회 | 정시 예약 실행이 단발 수집 |
 | 평일 06:30~07:00 | 10분 | 아침 창 루프 |
@@ -120,7 +120,7 @@ npm run collect -- --once --refresh-routes
 | 주말 06:00~23:59 | 매시 1회 | 정시 예약 실행이 단발 수집 |
 | 그 밖의 심야 | 수집 없음 | 보관 단계만 거친 뒤 수집 단계에서 종료 |
 
-아침·낮·저녁 창은 시작 60분 전부터 잡을 인수할 수 있다. 전용 시동이 늦거나 빠져도 매시 실행이
+아침, 낮, 저녁 창은 시작 60분 전부터 잡을 인수할 수 있다. 전용 시동이 늦거나 빠져도 매시 실행이
 남은 창을 이어받기 위한 장치다. 창 시작 전에 인수한 실행은 즉시 한 번 수집한 뒤 시작 시각까지
 기다린다. 이 추가 사이클도 호출 예산 계산에 들어간다.
 
@@ -138,7 +138,7 @@ npm run collect -- --once --refresh-routes
 
 ## 한 사이클에서 일어나는 일
 
-1. 24시간 안에 받은 노선·정류장 캐시가 있으면 재사용한다.
+1. 24시간 안에 받은 노선과 정류장 캐시가 있으면 재사용한다.
 2. 3330과 1650의 차량 위치를 병렬로 조회한다.
 3. `plateNo` 또는 `vehId`를 `VEHICLE_HASH_SECRET`으로 HMAC 처리해 앞 16자리만 남긴다.
 4. `data/snapshots/<노선>-<KST 날짜>.jsonl`에 한 줄을 덧붙인다.
@@ -152,12 +152,12 @@ npm run collect -- --once --refresh-routes
 
 | 실패 | 동작 |
 |---|---|
-| 데이터 저장소 401·403 | 첫 실패에서 루프 중단, 잡 실패 |
+| 데이터 저장소 401과 403 | 첫 실패에서 루프 중단, 잡 실패 |
 | 그 밖의 사이클 오류 | 연속 3회에서 루프 중단, 성격에 따라 잡 실패 또는 경고 |
 | 창 밖 단발 수집 오류 | 45초 간격으로 최대 3회 재시도 |
 | 실패 사이클 안의 일부 노선 성공 | 성공 파일을 먼저 업로드한 뒤 실패 처리 |
 | 저절로 낫는 실패로 한 건도 못 건짐 | 새 러너에서 한 판 더 (`retry-on-fresh-runner`) |
-| GitHub API 429·5xx | 보관·브랜치 준비 단계에서 최대 5회, 15·30·45·60초 간격 재시도 |
+| GitHub API 429와 5xx | 보관과 브랜치 준비 단계에서 최대 5회, 15, 30, 45, 60초 간격 재시도 |
 
 인증 실패를 오래 재시도하지 않는 이유는 호출 순서 때문이다. GBIS를 먼저 호출하고 그다음 파일을
 올리므로, 저장소 토큰이 죽은 상태에서 반복하면 좌석 API 쿼터만 사라진다.
@@ -253,7 +253,7 @@ GBIS 연결 실패는 상류가 아니라 러너의 송신 경로 문제다. 202
 3. 로그에서 `2개 노선` 저장과 당일 `collect/YYYY-MM-DD` 브랜치 업로드를 확인한다.
 4. 비공개 저장소의 `data/snapshots/3330-YYYY-MM-DD.jsonl`과
    `1650-YYYY-MM-DD.jsonl` 마지막 줄에서 `collectedAt`이 실행 시각과 맞는지 본다.
-5. 원문 `plateNo`·`vehId`가 저장되지 않았고 차량 `id`가 16자리 가명값인지 확인한다.
+5. 원문 `plateNo`와 `vehId`가 저장되지 않았고 차량 `id`가 16자리 가명값인지 확인한다.
 6. **Publish seat board**를 실행하고 공개 `latest.js`에는 차량 `id`가 남지 않았는지 확인한다.
 
 ### 매일 볼 것
@@ -285,9 +285,9 @@ npm run budget -- --detail
 
 | 요일 | 수집 사이클 | 수집 호출 | `/api/live` | 합계 | 여유 |
 |---|---:|---:|---:|---:|---:|
-| 월·화·목·금 | 253 | 506 | 390 | 896 | 104 |
+| 월, 화, 목, 금 | 253 | 506 | 390 | 896 | 104 |
 | 수 | 267 | 534 | 390 | 924 | 76 |
-| 토·일 | 18 | 36 | 390 | 426 | 574 |
+| 토, 일 | 18 | 36 | 390 | 426 | 574 |
 
 계산기가 전제로 두는 값은 2개 노선, 실시간 노출 6.5시간, CDN 캐시 120초다. `routeCount`와
 `liveExposureHours`는 `call-budget.mjs`의 상수이므로 노선을 추가하거나 노출 시간을 바꾸면 함께
@@ -331,14 +331,14 @@ ceil(240 × 60 ÷ 300) × 2 = 96회
 
 ## 장애 대응
 
-| 로그·증상 | 조치 |
+| 로그와 증상 | 조치 |
 |---|---|
-| `Bad Credentials`, 401, 403 | `BUS_DATA_REPO_TOKEN`의 만료·권한을 확인하고 세 Actions 워크플로를 다시 검증한다 |
+| `Bad Credentials`, 401, 403 | `BUS_DATA_REPO_TOKEN`의 만료와 권한을 확인하고 세 Actions 워크플로를 다시 검증한다 |
 | GBIS가 JSON 대신 오류문을 반환 | API 키 상태와 포털 사용량을 확인한다. 응답 원문을 공개 채널에 붙이지 않는다 |
 | 한 노선만 반복 실패 | 성공 노선 파일은 보존한다. 실패 노선의 route ID, 캐시, GBIS 응답 상태를 따로 본다 |
 | `승차 불가 지점을 찾지 못했습니다` | GBIS 정류장 이름 표기가 바뀌었는지 확인하고 `nonBoardingMarkers`를 검토한다 |
 | 단발 수집 전체 실패 | 그 시간대 관측은 복구할 수 없다. 원인을 고친 뒤 현재 시점에서 다시 수집한다 |
-| 끝난 수집 브랜치가 여러 개 | 각 브랜치의 날짜·파일·마지막 관측을 확인한 뒤 수동 보관 계획을 세운다 |
+| 끝난 수집 브랜치가 여러 개 | 각 브랜치의 날짜, 파일, 마지막 관측을 확인한 뒤 수동 보관 계획을 세운다 |
 | 화면만 오래됨 | 수집 파일이 최신이면 [배포 운영 가이드](deployment.md#증상별-확인-순서)의 발행 경로를 본다 |
 | 수집 공백 경고 | [`forecast-validation.md`](forecast-validation.md#수집-공백과-발행-신선도)를 따라 실제 공백과 오탐을 구분한다 |
 

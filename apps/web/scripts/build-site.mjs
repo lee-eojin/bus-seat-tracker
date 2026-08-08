@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 //   BUS_DATA_REPO_TOKEN  비공개 저장소를 클론한다 (Vercel 빌드)
 //
 // 라이브 예측 로그(`--predictions`)는 여기서 만들지 않는다. 비공개 저장소에 커밋을 남기는
-// 작업이라 빌드의 부수 효과가 되면 안 된다 — GitHub Actions가 계속 담당한다.
+// 작업이라 빌드의 부수 효과가 되면 안 된다. GitHub Actions가 계속 담당한다.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(here, '..', '..', '..');
@@ -56,7 +56,7 @@ function resolveDataDirectory() {
   run('git', ['clone', '--quiet', '--depth', '1', `https://${dataRepository}`, checkout], { env: gitAuthEnvironment });
 
   // 당일 수집 브랜치가 있으면 그쪽이 최신이다. 없으면 main(아카이브)만으로도 빌드된다.
-  // 브랜치 부재(정상 폴백)와 네트워크·권한 장애는 구분한다 — 장애까지 폴백으로 삼키면
+  // 브랜치 부재(정상 폴백)와 네트워크나 권한 장애는 구분한다. 장애까지 폴백으로 삼키면
   // 낡은 데이터로 배포가 조용히 성공한다.
   const todayBranch = `collect/${seoulDate()}`;
   const probe = spawnSync(

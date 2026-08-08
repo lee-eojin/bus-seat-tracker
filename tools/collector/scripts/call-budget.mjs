@@ -17,7 +17,7 @@ const dailyLimit = 1000;
 const liveCacheSeconds = 120;
 const liveExposureHours = 6.5;
 
-// 워크플로 크론 (KST 분). 매시 시동에 아침·저녁 시동을 더한다.
+// 워크플로 크론 (KST 분). 매시 시동에 아침과 저녁 시동을 더한다.
 const hourlyCronMinutes = Array.from({ length: 24 }, (_, hour) => hour * 60);
 const weekdayStartupCronMinutes = [390, 1050];
 

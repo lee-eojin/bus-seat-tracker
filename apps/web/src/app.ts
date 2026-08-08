@@ -126,10 +126,10 @@ function minutesSince(isoText: string | null): number | null {
   return Number.isFinite(elapsed) ? Math.max(0, Math.round(elapsed / 60_000)) : null;
 }
 
-// 수집 워크플로의 창 정의와 같은 값 (KST, 분 단위): 평일 피크 06:30-10:00·17:30-20:30,
+// 수집 워크플로의 창 정의와 같은 값 (KST, 분 단위): 평일 피크 06:30-10:00과 17:30-20:30,
 // 운행 시간대(평일 05-21시, 주말 06-23시 정시)는 시간당, 심야는 수집 휴지.
 // 심야와 운행 재개 직후 2시간은 마지막 정시 스냅샷(평일 21시, 주말 23시) 이후 경과를
-// 기대 주기로 삼는다 — 밤새, 그리고 아침 첫 스냅샷이 착지하기 전에 배너가 오작동하지 않게.
+// 기대 주기로 삼는다. 밤새, 그리고 아침 첫 스냅샷이 착지하기 전에 배너가 오작동하지 않게.
 // 피크 창 안의 조밀 구간(1분)은 여기 반영하지 않는다. 화면 신선도의 하한은 수집 간격이
 // 아니라 Pages 발행 주기(30분)이므로, 기대 주기를 1분으로 낮추면 상시 경고가 뜬다.
 function expectedIntervalMinutes(): number {
@@ -183,7 +183,7 @@ function directionOf(sequence: number | null, turnSequence: number | null): Dire
   return sequence <= turnSequence ? 'up' : 'down';
 }
 
-// 라이브 응답의 차량번호(plateNo)는 읽지도 저장하지도 않는다 — 공개 정책과 동일 기준.
+// 라이브 응답의 차량번호(plateNo)는 읽지도 저장하지도 않는다 (공개 정책과 동일 기준).
 function readLiveVehicles(payload: unknown, turnSequence: number | null): DisplayVehicle[] {
   if (!isRecord(payload)) return [];
   return asList(payload.vehicles).flatMap((value) => {
@@ -211,7 +211,7 @@ function parseApiQueryTime(value: string | null): number | null {
   return Number.isFinite(time) ? time : null;
 }
 
-// Phase 0 관측 로그 (v2 §10.1): 수집 방식·페이지 활성·응답 지연을 관측과 함께 남긴다.
+// Phase 0 관측 로그 (v2 §10.1): 수집 방식과 페이지 활성, 응답 지연을 관측과 함께 남긴다.
 function appendPhase0Observation(route: LatestRoute, vehicles: DisplayVehicle[], apiQueryTime: string | null): void {
   try {
     const raw = localStorage.getItem('phase0-observations');
@@ -251,7 +251,7 @@ async function refreshLiveVehicles(): Promise<void> {
       // stale-while-revalidate로 낡은 응답을 받아도 나이가 정직하게 표시되고, 한도
       // (180초)를 넘으면 스냅샷 표시로 자연 강등된다. 서버 벽시계(apiQueryTime)와
       // 비교하지 않는 이유는 시계가 몇 분 어긋난 기기에서 실시간 표시가 조용히
-      // 죽기 때문이다 — Age는 기간 값이라 시계 오차와 무관하다.
+      // 죽기 때문이다. Age는 기간 값이라 시계 오차와 무관하다.
       fetchedAt: Date.now() - Math.max(0, Number(response.headers.get('age') ?? '0') || 0) * 1000,
     };
     appendPhase0Observation(route, live.vehicles, readApiQueryTime(payload));
@@ -300,8 +300,8 @@ function probabilityPhrase(cell: HistoryBucket): string {
 function recommendationText(recommendation: BoardingRecommendation): string {
   switch (recommendation.kind) {
     case 'unset': return '정류장의 길찾기를 눌러 "이 정류장에서 타요"를 선택하면 추천이 시작됩니다.';
-    case 'elsewhere': return '내 정류장이 이 노선·방향에 없습니다. 노선이나 방향을 바꿔보세요.';
-    case 'insufficient': return `데이터 부족 — 이 시간대 관측 ${recommendation.samples}회 (기준 ${recommendationMinSamples}회). 수집이 쌓이면 자동으로 추천이 켜집니다.`;
+    case 'elsewhere': return '내 정류장이 이 노선의 이 방향에 없습니다. 노선이나 방향을 바꿔보세요.';
+    case 'insufficient': return `데이터 부족: 이 시간대 관측 ${recommendation.samples}회 (기준 ${recommendationMinSamples}회). 수집이 쌓이면 자동으로 추천이 켜집니다.`;
     case 'stay': return `여기서 기다리세요. 이 시간대 ${probabilityPhrase(recommendation.cell)}.`;
     case 'move': return `${recommendation.hops}정거장 앞 ${recommendation.target.name ?? `정류장 ${recommendation.target.sequence}`}에서 타세요. 내 정류장 ${probabilityPhrase(recommendation.myCell)}, 그곳은 탑승 확률 ${percent(nonFullObservationRate(recommendation.targetCell))}% (관측 ${recommendation.targetCell.samples}회).`;
     case 'no-candidate': return `${probabilityPhrase(recommendation.cell)}. 상류에 표본이 충분한 여유 정류장이 아직 없습니다.`;
@@ -459,7 +459,7 @@ function renderFreshness(route: LatestRoute): void {
   if (liveIsFresh(route) && live.fetchedAt !== null) {
     const seconds = Math.round((Date.now() - live.fetchedAt) / 1000);
     badge.classList.add('ok');
-    label.textContent = `실시간 · ${seconds < 5 ? '방금' : `${seconds}초 전`} 조회`;
+    label.textContent = `실시간, ${seconds < 5 ? '방금' : `${seconds}초 전`} 조회`;
     setBanner(null);
     return;
   }
@@ -473,7 +473,7 @@ function renderFreshness(route: LatestRoute): void {
 
   const expected = expectedIntervalMinutes();
   const tierLabel = expected === 10 ? '집중 수집 시간대' : expected === 60 ? '시간당 수집 시간대' : '심야 수집 휴지';
-  label.textContent = `${minutes === 0 ? '방금 수집됨' : `${minutes}분 전 수집`} · ${tierLabel}`;
+  label.textContent = `${minutes === 0 ? '방금 수집됨' : `${minutes}분 전 수집`}, ${tierLabel}`;
   if (minutes <= expected * 2) {
     badge.classList.add('ok');
     setBanner(null);
@@ -580,9 +580,9 @@ function renderRecordList(): void {
     ? '아직 기록이 없습니다. 매일 아침 결과를 남기면 추천 vs 경험칙 판정의 채점표가 됩니다.'
     : records.slice(-3).reverse().map((entry) => {
       const counts = entry.waitingCount !== null || entry.alightingCount !== null
-        ? ` · 대기 ${entry.waitingCount ?? '?'} 하차 ${entry.alightingCount ?? '?'}`
+        ? `, 대기 ${entry.waitingCount ?? '?'} 하차 ${entry.alightingCount ?? '?'}`
         : '';
-      return `${entry.date} · ${entry.result} · 추천 ${entry.followed}${counts} · 경험칙 "${entry.intuition}"`;
+      return `${entry.date}, ${entry.result}, 추천 ${entry.followed}${counts}, 경험칙 "${entry.intuition}"`;
     }).join('\n');
 }
 
@@ -623,7 +623,7 @@ function stopShortName(name: string | null, sequence: number): string {
   return segments.find((segment) => segment.includes('역')) ?? segments[0] ?? name;
 }
 
-/** "판교역으로/백현마을1단지로" — 받침 유무에 따른 방향 조사. ㄹ받침은 '로'를 쓴다. */
+/** 받침 유무에 따른 방향 조사 ("판교역으로/백현마을1단지로"). ㄹ받침은 '로'를 쓴다. */
 function directionJosa(name: string): string {
   const code = name.charCodeAt(name.length - 1);
   if (code < 0xac00 || code > 0xd7a3) return '로';
@@ -650,7 +650,7 @@ function conclusionDetail(route: LatestRoute, frame: BoardFrame, sequence: numbe
     if (queue) parts.push(`${queueLabel(queue)} (${Math.round(queue.elapsedMinutes)}분째)`);
   }
   if (forecast?.lowConfidence) parts.push('표본 적음');
-  return parts.length > 0 ? parts.join(' · ') : null;
+  return parts.length > 0 ? parts.join(', ') : null;
 }
 
 function renderConclusion(route: LatestRoute, frame: BoardFrame): void {
@@ -682,7 +682,7 @@ function renderConclusion(route: LatestRoute, frame: BoardFrame): void {
     headlineText = '노선 데이터를 못 받았어요';
     infoLines.push(['ccl-why', '연결을 확인하고 새로고침해 주세요. 실시간 좌석은 아래에서 그대로 볼 수 있어요.']);
   } else if (recommendation.kind === 'elsewhere') {
-    headlineText = '이 노선·방향에 내 정류장이 없어요';
+    headlineText = '이 노선의 이 방향에 내 정류장이 없어요';
     infoLines.push(['ccl-why', '노선이나 방향을 바꾸거나, 아래에서 정류장을 다시 골라 주세요.']);
   } else if (recommendation.kind === 'insufficient') {
     headlineText = '아직 판정할 표본이 부족해요';
@@ -718,7 +718,7 @@ function renderConclusion(route: LatestRoute, frame: BoardFrame): void {
     const targetForecast = forecastAt(frame, recommendation.target.sequence);
     const targetDetail = conclusionDetail(route, frame, recommendation.target.sequence);
     if (targetForecast && targetDetail) {
-      infoLines.push(['ccl-detail', `그쪽은 ${verdictLabels[targetForecast.verdict]} · ${targetDetail}`]);
+      infoLines.push(['ccl-detail', `그쪽은 ${verdictLabels[targetForecast.verdict]}, ${targetDetail}`]);
     } else {
       infoLines.push(['ccl-detail', `그쪽 탑승 확률 ${percent(nonFullObservationRate(recommendation.targetCell))}% (관측 ${recommendation.targetCell.samples}회)`]);
     }
@@ -735,7 +735,7 @@ function renderConclusion(route: LatestRoute, frame: BoardFrame): void {
   //    버튼은 상주 요소라 재렌더에 포커스를 잃지 않는다 ──
   if (boardingStop) {
     stopLine.hidden = false;
-    const text = `내 정류장 · ${boardingStop.name}`;
+    const text = `내 정류장: ${boardingStop.name}`;
     if (stopLine.textContent !== text) stopLine.textContent = text;
   } else {
     stopLine.hidden = true;
@@ -903,7 +903,7 @@ function renderAxis(route: LatestRoute, frame: BoardFrame): void {
       if (forecast.lowConfidence) {
         const thin = document.createElement('span');
         thin.className = 'thin';
-        thin.textContent = ' · 표본 적음';
+        thin.textContent = ', 표본 적음';
         seats.append(thin);
       }
 
@@ -919,7 +919,7 @@ function renderAxis(route: LatestRoute, frame: BoardFrame): void {
         waiting.textContent = queueLabel(queue);
         const thin = document.createElement('span');
         thin.className = 'thin';
-        thin.textContent = ` · ${Math.round(queue.elapsedMinutes)}분째`;
+        thin.textContent = `, ${Math.round(queue.elapsedMinutes)}분째`;
         waiting.append(thin);
         verdictBox.append(waiting);
       }
@@ -1154,7 +1154,7 @@ function loadDeferredData(): void {
     });
     tag.addEventListener('error', () => {
       deferredDataPending -= 1;
-      console.warn(`${src} 로딩 실패 — 예보 없이 표시합니다`);
+      console.warn(`${src} 로딩 실패, 예보 없이 표시합니다`);
       render();
     });
     document.head.append(tag);
@@ -1166,7 +1166,7 @@ render();
 loadDeferredData();
 loadLiveConfig();
 setInterval(reloadData, 60_000);
-// 라이브 폴링은 탭이 보일 때만 돈다 — 공유 API 키의 일일 쿼터 보호 (v2 §14.8)
+// 라이브 폴링은 탭이 보일 때만 돈다 (공유 API 키의 일일 쿼터 보호, v2 §14.8)
 setInterval(() => {
   if (document.visibilityState === 'visible') void refreshLiveVehicles();
 }, livePollIntervalMs);

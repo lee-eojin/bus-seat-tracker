@@ -77,7 +77,7 @@ jobs:
 
       - uses: actions/deploy-pages@v4
 
-      # Vercel 프로젝트가 연결되면 같은 주기로 그쪽도 갱신한다. 훅이 없으면 건너뛴다 —
+      # Vercel 프로젝트가 연결되면 같은 주기로 그쪽도 갱신한다. 훅이 없으면 건너뛴다.
       # 설정 전에 이 스텝이 실패하면 예측 로그 적재까지 같이 멈춘다.
       # `secrets`는 `if:`에서 쓸 수 없으므로 env로 받아 셸에서 판정한다.
       - name: Trigger Vercel deploy

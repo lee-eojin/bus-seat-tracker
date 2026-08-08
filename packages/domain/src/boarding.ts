@@ -3,10 +3,10 @@ import type { VehicleObservation } from './profile.js';
 // 탑승 가능성 판정 (docs/model/boarding-verdict.md).
 //
 // 좌석 예보만으로는 "탈 수 있는가"에 답할 수 없다. 같은 대기 인원이 좌석에 따라 정반대
-// 결론을 내기 때문이다 — 대기 29명은 44석 버스에서 전원 탑승이고, 대기 17명은 13석
+// 결론을 내기 때문이다. 대기 29명은 44석 버스에서 전원 탑승이고, 대기 17명은 13석
 // 버스에서 4명이 남는다. 판정은 좌석과 대기를 함께 봐야 성립한다.
 
-/** 정류장 한 곳을 지나간 버스 하나의 도착·출발 잔여석. */
+/** 정류장 한 곳을 지나간 버스 하나의 도착 잔여석과 출발 잔여석. */
 export interface StopPass {
   arrivalSeats: number;
   departureSeats: number;
@@ -41,12 +41,12 @@ export function nextFullDepartureStreak(streak: number, pass: StopPass): number 
 /**
  * 정류장별 만석 연속 수를 최근 관측에서 센다.
  *
- * 같은 정류장에서 두 번 이상 잡힌 운행만 쓴다 — 한 번뿐이면 그 값이 도착인지 출발인지
+ * 같은 정류장에서 두 번 이상 잡힌 운행만 쓴다. 한 번뿐이면 그 값이 도착인지 출발인지
  * 가릴 수 없기 때문이다(docs/model/queue-estimation.md). 따라서 조밀 수집 구간 밖에서는
  * 항목이 아예 비고, 그것은 "연속 0"이 아니라 "모름"이다. 호출부는 둘을 구분해야 한다.
  *
  * 창은 [since, until] 양끝을 모두 닫는다. 상한이 없으면 기준 시각 이후의 통과까지 세어
- * 연속이 잘못 끊긴다 — 학습 데이터로 과거 시점을 재현할 때 드러나는 차이다.
+ * 연속이 잘못 끊긴다. 학습 데이터로 과거 시점을 재현할 때 드러나는 차이다.
  */
 export function fullDepartureStreaks(runs: VehicleObservation[][], since: number, until: number): Record<string, number> {
   const passesByStop = new Map<number, Array<{ at: number; pass: StopPass }>>();
@@ -84,7 +84,7 @@ export const verdictSeatMargin = 10;
 
 /**
  * 30분 버킷 하나가 검열로 비면 μ가 실제의 몇 분의 1로 내려앉는다. 2026-07-24까지의
- * 학습분에서 범계역 08:00 버킷이 그랬다 — 관측의 63%가 만석이라 버려져 μ가 1.88이
+ * 학습분에서 범계역 08:00 버킷이 그랬다. 관측의 63%가 만석이라 버려져 μ가 1.88이
  * 됐고, 같은 시간대 실측 승차는 6.0이었다. 인접 버킷의 최댓값을 쓰면 그 셀을 우회한다.
  *
  * 시간축의 계통 밀림 때문이 아니다. 조밀 관측 197개 셀로 ±1 버킷 이동을 대조한 결과

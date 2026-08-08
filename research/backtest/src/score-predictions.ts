@@ -17,7 +17,7 @@ const projectRoot = path.resolve(currentDirectory, '..', '..', '..', '..');
 const matchWindowMs = 90 * 60_000;
 
 // 신선도 판정. "발행 시점에 더 새 관측이 있었는데 낡은 근거를 썼는가"만 묻는다.
-// 수집이 멎어 새 관측 자체가 없었다면 발행 잘못이 아니므로 여기 잡히지 않는다 —
+// 수집이 멎어 새 관측 자체가 없었다면 발행 잘못이 아니므로 여기 잡히지 않는다.
 // 그건 아래 수집 공백 검사가 따로 센다. 고정 임계(25분) 시절에는 수집이 성긴
 // 시간대의 정상 발행이 전부 걸렸고, 수집 간격 기반 임계로 바꾼 뒤에도 크론 스로틀이
 // 만든 수집 공백을 발행 탓으로 돌려 주말마다 오탐이 났다(2026-08-01, 124건).
@@ -39,7 +39,7 @@ export function staleBasisAt(publishedMs: number, basisMs: number, latestAvailab
 
 // 수집 공백 허용치. 관측 사이 간격(운행 시간만 합산)이 그 구간에서 기대되는 수집
 // 간격의 두 배 + 15분을 넘으면 공백이다. 한 사이클 결손까지는 정상으로 본다.
-// 구간이 가로지르는 시대 중 가장 성긴 것을 기준으로 잡아야 심야·조밀 경계에서
+// 구간이 가로지르는 시대 중 가장 성긴 것을 기준으로 잡아야 심야/조밀 경계에서
 // 오탐이 없다.
 export function gapToleranceMs(fromMs: number, toMs: number): number | null {
   let sparsestGapSeconds: number | null = null;
@@ -153,7 +153,7 @@ function matchActual(observations: VehicleObservation[], row: PredictionRow): Ve
   return null;
 }
 
-// 예측이 근거로 삼은 관측(출발 정류장·좌석)이 예측 시각 기준 얼마나 낡았는지.
+// 예측이 근거로 삼은 관측(출발 정류장과 좌석)이 예측 시각 기준 얼마나 낡았는지.
 function basisAge(observations: VehicleObservation[], row: PredictionRow): number | null {
   const predictedAt = Date.parse(row.at);
   let newest: number | null = null;
@@ -219,7 +219,7 @@ async function main(): Promise<void> {
     scored.push({ row, actualSeats: actual.seats, error: row.seats - actual.seats, basisAgeMs: age });
   }
 
-  // 수집 공백. 채점일에 끝나는 관측 간격만 본다 — 공백의 책임은 발행이 아니라
+  // 수집 공백. 채점일에 끝나는 관측 간격만 본다. 공백의 책임은 발행이 아니라
   // 수집(크론 스로틀, 단발 스냅샷 실패)에 있으므로 실패가 아니라 보고 대상이다.
   const dayStartMs = Date.parse(`${targetDate}T00:00:00+09:00`);
   const dayEndMs = dayStartMs + 24 * 3600 * 1000;
@@ -266,13 +266,13 @@ async function main(): Promise<void> {
   };
 
   console.log('═'.repeat(70));
-  console.log(`라이브 예측 채점 · ${targetDate}`);
+  console.log(`라이브 예측 채점: ${targetDate}`);
   console.log('═'.repeat(70));
-  console.log(`예측 ${rows.length}건 · 대조 성공 ${scored.length}건 (${(report.matchRate * 100).toFixed(1)}%) · 미대조 ${unmatched}건`);
-  console.log(`더 새 관측이 있는데 낡은 근거로 발행된 예측 ${staleBasis}건 · 근거를 못 찾은 예측 ${unknownBasis}건`);
+  console.log(`예측 ${rows.length}건, 대조 성공 ${scored.length}건 (${(report.matchRate * 100).toFixed(1)}%), 미대조 ${unmatched}건`);
+  console.log(`더 새 관측이 있는데 낡은 근거로 발행된 예측 ${staleBasis}건, 근거를 못 찾은 예측 ${unknownBasis}건`);
   if (collectionGaps.length > 0) {
     const worst = collectionGaps[0]!;
-    console.log(`수집 공백 ${collectionGaps.length}건 · 최대 ${worst.serviceMinutes}분 (${worst.route}, 운행 시간 기준)`);
+    console.log(`수집 공백 ${collectionGaps.length}건, 최대 ${worst.serviceMinutes}분 (${worst.route}, 운행 시간 기준)`);
   }
   console.log('\n지평   n      MAE     편향   탑승가능 Brier');
   for (const horizon of horizons) {

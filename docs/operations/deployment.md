@@ -15,7 +15,7 @@
 ```text
 코드 변경 ────────────────> Vercel Git 연동 ───────> Preview / Production
 
-비공개 스냅샷 저장소 ──> Publish seat board (매시 17·47분, UTC)
+비공개 스냅샷 저장소 ──> Publish seat board (매시 17분과 47분, UTC)
                               ├─ build:data
                               ├─ GitHub Pages 배포
                               ├─ 라이브 예측 로그 저장
@@ -55,7 +55,7 @@ Vercel 빌드
 |---|---|---|---|
 | `BUS_DATA_REPO_TOKEN` | 빌드 | `bus-seat-tracker-data` Contents 읽기 | `BUS_DATA_DIR 또는 BUS_DATA_REPO_TOKEN 중 하나가 필요합니다`와 함께 빌드 실패 |
 | `GYEONGGI_BUS_API_KEY` | 함수 실행 | GBIS 조회 키 | `/api/live`가 503, 화면은 마지막 스냅샷으로 강등 |
-| `DATABASE_URL` | 함수 실행 | Neon의 `feedback_events` 쓰기 | `/api/feedback`이 503, 방문·설문 저장 실패 |
+| `DATABASE_URL` | 함수 실행 | Neon의 `feedback_events` 쓰기 | `/api/feedback`이 503, 방문과 설문 저장 실패 |
 
 Preview와 Production을 모두 쓴다면 각 환경에 따로 등록한다. `DATABASE_URL`을 Neon 연동이
 주입하더라도 연결 대상과 적용 환경은 대시보드에서 다시 확인한다. Vercel에서 Sensitive로 저장한
@@ -65,7 +65,7 @@ Preview와 Production을 모두 쓴다면 각 환경에 따로 등록한다. `DA
 
 | 이름 | 쓰는 워크플로 | 필요한 권한 |
 |---|---|---|
-| `BUS_DATA_REPO_TOKEN` | 수집, 발행, 예보 검증 | 비공개 데이터 저장소 Contents 읽기·쓰기 |
+| `BUS_DATA_REPO_TOKEN` | 수집, 발행, 예보 검증 | 비공개 데이터 저장소 Contents 읽기와 쓰기 |
 | `GYEONGGI_BUS_API_KEY` | 수집 | GBIS 조회 |
 | `VEHICLE_HASH_SECRET` | 수집 | 차량 식별자 HMAC 가명화 |
 | `VERCEL_DEPLOY_HOOK_URL` | 발행 | Vercel의 `main` Deploy Hook 호출 |
@@ -162,7 +162,7 @@ curl -i -X POST "$DEPLOYMENT_URL/api/live?route=3330"
 | 요청 | 기대 결과 |
 |---|---|
 | 정확한 GET `route=3330` 또는 `route=1650` | 200, `Cache-Control: public, s-maxage=120, stale-while-revalidate=240` |
-| 허용하지 않은 노선이나 쿼리·경로 변형 | 400, `Cache-Control: no-store` |
+| 허용하지 않은 노선이나 쿼리, 경로 변형 | 400, `Cache-Control: no-store` |
 | GET 이외의 메서드 | 405, `Allow: GET`, `Cache-Control: no-store` |
 | 키가 없는 배포 | 503, `Cache-Control: no-store` |
 
@@ -196,9 +196,9 @@ Protection이 켜진 상태다. 공개 서비스가 목표라면 Vercel 대시�
 
 토큰을 평상시 교체할 때는 새 값 검증이 끝나기 전에 이전 값을 폐기하지 않는다.
 
-1. 소비자를 적는다. Actions의 `BUS_DATA_REPO_TOKEN`은 수집·발행·예보 검증 세 곳이 함께 쓴다.
+1. 소비자를 적는다. Actions의 `BUS_DATA_REPO_TOKEN`은 수집, 발행, 예보 검증 세 곳이 함께 쓴다.
    Vercel의 같은 이름은 빌드만 쓴다.
-2. Actions용 읽기·쓰기 토큰과 Vercel용 읽기 전용 토큰을 각각 만든다.
+2. Actions에는 읽기와 쓰기 토큰을, Vercel에는 읽기 전용 토큰을 각각 만든다.
 3. GitHub Secret을 바꾼 뒤 **Collect bus seats**, **Publish seat board**, **Verify forecast**를
    수동 실행해 비공개 저장소 읽기와 쓰기를 모두 확인한다.
 4. Vercel 환경변수를 바꾸고 새 배포를 시작한다. 빌드 로그에서 당일 브랜치 또는 `main`을
@@ -239,14 +239,14 @@ npm run budget
 
 | 증상 | 먼저 볼 곳 | 판단 |
 |---|---|---|
-| Vercel 빌드가 데이터 인증 오류로 실패 | Vercel의 `BUS_DATA_REPO_TOKEN`과 적용 환경 | 읽기 권한·만료·재배포 시점 확인 |
+| Vercel 빌드가 데이터 인증 오류로 실패 | Vercel의 `BUS_DATA_REPO_TOKEN`과 적용 환경 | 읽기 권한, 만료, 재배포 시점 확인 |
 | 화면 데이터만 오래되고 `/api/live`는 정상 | `Publish seat board`의 Hook 단계와 `latest.js`의 `generatedAt` | 코드 배포와 데이터 배포가 갈라진 상태 |
 | `/api/live`가 503 | Vercel의 `GYEONGGI_BUS_API_KEY` | 환경변수 누락 또는 적용 전 배포 |
 | `/api/live`가 502 | 함수 로그와 공공데이터포털 사용량 | GBIS 타임아웃, 한도 소진, 키 오류 가능 |
 | `/api/live`가 400 | 경로와 쿼리 원문 | `/api/live?route=3330` 또는 `1650`만 허용 |
-| `/api/feedback`이 503 | `DATABASE_URL`과 Neon 연결 상태 | 방문·설문 저장소 미연결 |
+| `/api/feedback`이 503 | `DATABASE_URL`과 Neon 연결 상태 | 방문과 설문 저장소 미연결 |
 | 공개 주소가 로그인 화면으로 이동 | Deployment Protection | 공개 범위 설정 확인 |
-| Pages는 최신인데 Vercel만 오래됨 | `VERCEL_DEPLOY_HOOK_URL`과 Vercel 배포 목록 | Hook 누락·실패 가능 |
+| Pages는 최신인데 Vercel만 오래됨 | `VERCEL_DEPLOY_HOOK_URL`과 Vercel 배포 목록 | Hook 누락이나 실패 가능 |
 
 데이터 갱신이 오래 멈췄던 사례와 재발 확인법은
 [정적 데이터 지연 장애 기록](incidents/2026-07-29-stale-deployment.md)에 정리했다.

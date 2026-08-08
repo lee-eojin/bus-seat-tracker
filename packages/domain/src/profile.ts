@@ -66,8 +66,8 @@ export function observationsByVehicle(snapshots: Snapshot[], acceptDate?: (date:
 }
 
 // 구간 귀속 규약 (v2 §4.2의 S⁻/S⁺ 매핑 질문):
-// departure — 잔여석이 정류장 "출발(승차 반영 후)" 상태라고 보고 Δ를 (a,b]에 귀속 (기존 동작)
-// arrival   — 잔여석이 정류장 "도착(승차 반영 전)" 상태라고 보고 Δ를 [a,b−1]에 귀속
+// departure: 잔여석이 정류장 "출발(승차 반영 후)" 상태라고 보고 Δ를 (a,b]에 귀속 (기존 동작)
+// arrival:   잔여석이 정류장 "도착(승차 반영 전)" 상태라고 보고 Δ를 [a,b−1]에 귀속
 export type SpanAttribution = 'departure' | 'arrival';
 
 function spanStopRange(fromSequence: number, toSequence: number, attribution: SpanAttribution): [number, number] {
@@ -252,7 +252,7 @@ export function distributionQuantile(distribution: number[], quantile: number): 
 // ── 구간합 역산 프로파일 (v2 §4.3: 균등 배분 제거) ──
 // 관측쌍이 주는 것은 구간 합 Δᵢ = Σ_{k∈Kᵢ} N_k 뿐이다. 배분을 가정하지 않고,
 // 서로 다른 운행의 구간 경계가 어긋나며 겹치는 것을 제약으로 삼아 정류장별
-// 평균·분산을 ridge 최소제곱 좌표하강으로 복원한다. 모든 구간이 동일하게
+// 평균과 분산을 ridge 최소제곱 좌표하강으로 복원한다. 모든 구간이 동일하게
 // 겹치면(추가 정보 없음) 균등 배분과 같은 해로 퇴화한다.
 
 interface SpanObservation {

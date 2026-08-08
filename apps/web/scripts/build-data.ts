@@ -60,7 +60,7 @@ function printHelp(): void {
   npm run build:data -- --predictions=../bus-predictions/predictions/2026-07-26.jsonl
 
 수집기 JSONL을 읽어 apps/web/public/data 아래에 화면용 데이터 파일을 생성합니다.
---predictions를 주면 발행 시점의 1·3·6정류장 좌석 예측을 JSONL로 덧붙입니다. 차량 가명 ID가 들어가므로
+--predictions를 주면 발행 시점의 1, 3, 6정류장 좌석 예측을 JSONL로 덧붙입니다. 차량 가명 ID가 들어가므로
 발행 대상 디렉터리 밖(비공개 저장소)을 가리켜야 합니다.`);
 }
 
@@ -79,7 +79,7 @@ async function loadRouteCaches(dataDirectory: string): Promise<RouteCache[]> {
   try {
     fileNames = await readdir(routesDirectory);
   } catch (error: unknown) {
-    if (isMissingFile(error)) throw new Error(`정류장 캐시가 없습니다: ${routesDirectory} — collector.ts를 먼저 실행하세요.`);
+    if (isMissingFile(error)) throw new Error(`정류장 캐시가 없습니다: ${routesDirectory}. collector.ts를 먼저 실행하세요.`);
     throw error;
   }
 
@@ -153,7 +153,7 @@ function buildLatestRoute(cache: RouteCache, snapshot: Snapshot | null): LatestR
       latitude: stop.latitude,
       longitude: stop.longitude,
     })),
-    // 가명 차량 ID도 공개 산출물에는 싣지 않는다 — 라이브 경로(readLiveVehicles)와 같은 기준.
+    // 가명 차량 ID도 공개 산출물에는 싣지 않는다 (라이브 경로 readLiveVehicles와 같은 기준).
     vehicles: (snapshot?.vehicles ?? []).map((vehicle: VehicleSnapshot) => ({
       id: null,
       stationSeq: vehicle.currentStopSequence,
@@ -246,7 +246,7 @@ interface PredictionRow {
 }
 
 // 발행 시점의 좌석 예측을 남긴다. 다음 날 실제 관측과 대조하면 재현 채점(백테스트)이
-// 잡지 못하는 파이프라인 문제 — 낡은 프로파일, 멈춘 발행 — 가 드러난다.
+// 잡지 못하는 파이프라인 문제(낡은 프로파일, 멈춘 발행)가 드러난다.
 // 차량 가명 ID가 들어가므로 이 파일은 비공개 저장소에만 쓴다 (docs/architecture.md 데이터 경계).
 function forecastRows(cache: RouteCache, snapshot: Snapshot | null, profile: ProfileRoute, generatedAt: string): PredictionRow[] {
   if (!snapshot) return [];
@@ -339,7 +339,7 @@ async function buildOnce(dataDirectory: string, targetDate: string, predictionLo
   await writeGlobalScript('daily.js', '__DAILY__', { generatedAt: latest.generatedAt, days: dailyDays });
   await writeGlobalScript('history.js', '__HISTORY__', { generatedAt: latest.generatedAt, routes: historyRoutes });
   await writeGlobalScript('profile.js', '__PROFILE__', { generatedAt: latest.generatedAt, routes: profileRoutes });
-  console.log(`${new Date().toLocaleTimeString('ko-KR')} · 집계 완료 (${latestRoutes.map((entry) => `${entry.route.name} ${entry.vehicles.length}대`).join(', ')})`);
+  console.log(`${new Date().toLocaleTimeString('ko-KR')} 집계 완료 (${latestRoutes.map((entry) => `${entry.route.name} ${entry.vehicles.length}대`).join(', ')})`);
 }
 
 async function main(): Promise<void> {

@@ -72,7 +72,7 @@ describe('관측 비율', () => {
     assert.deepEqual(wilson95Interval(0, 0), { low: 0, high: 1 });
   });
 
-  it('호출자가 고른 평일·주말과 30분 버킷을 사용한다', () => {
+  it('호출자가 고른 평일/주말과 30분 버킷을 사용한다', () => {
     const weekdayCell = { samples: 10, zeroCount: 1 };
     const weekendCell = { samples: 20, zeroCount: 8 };
     const history = historyRoute([[3, weekdayCell]], [[3, weekendCell]]);

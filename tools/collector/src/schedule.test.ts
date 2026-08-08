@@ -153,7 +153,7 @@ describe('expectedSnapshotGapSeconds', () => {
     assert.equal(expectedSnapshotGapSeconds(kst('토', 12, 0)), offWindowSnapshotGapSeconds);
   });
 
-  it('운행 시간 밖은 null이다 — 수집이 없어 신선도를 따질 수 없다', () => {
+  it('운행 시간 밖은 null이다 (수집이 없어 신선도를 따질 수 없다)', () => {
     assert.equal(expectedSnapshotGapSeconds(kst('월', 4, 59)), null);
     assert.equal(expectedSnapshotGapSeconds(kst('월', 22, 0)), null);
     assert.equal(expectedSnapshotGapSeconds(kst('토', 5, 59)), null);
@@ -176,7 +176,7 @@ describe('serviceElapsedMs', () => {
     assert.equal(serviceElapsedMs(kst('월', 8, 0), kst('월', 8, 40)), 40 * 60_000);
   });
 
-  it('평일 심야 공백은 세지 않는다 — 전날 21:04 근거의 새벽 05:19 발행은 75분이다', () => {
+  it('평일 심야 공백은 세지 않는다 (전날 21:04 근거의 새벽 05:19 발행은 75분이다)', () => {
     assert.equal(serviceElapsedMs(kst('월', 21, 4), kst('화', 5, 19)), 75 * 60_000);
   });
 
