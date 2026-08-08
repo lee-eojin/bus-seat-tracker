@@ -1,8 +1,9 @@
 node_modules/
 dist/
 .env*
-bus-seat-collector/data/
-prototype-bus/data/
+!tools/collector/.env.example
+/data/
+/apps/web/public/data/
 .gstack/
 field-observations.jsonl
 site/

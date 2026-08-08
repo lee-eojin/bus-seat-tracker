@@ -174,7 +174,7 @@ jobs:
 
             core.summary.addRaw(
               '\n> 재현 채점(백테스트)은 구간합 지표만 본다. 정류장 단위 수요 배분의 차이(검증 보고서 §4·§7)와\n' +
-              '> 만석 검열로 가려진 초과 수요(`docs/04-queue-recovery.md` §1)는 여기에 나타나지 않는다.\n',
+              '> 만석 검열로 가려진 초과 수요(`docs/model/queue-estimation.md`)는 여기에 나타나지 않는다.\n',
             );
             await core.summary.write();
 

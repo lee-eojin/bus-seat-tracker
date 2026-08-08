@@ -8,16 +8,18 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc",
-    "collect": "npm run build && node dist/bus-seat-collector/collector.js",
-    "build:data": "npm run build && node dist/prototype-bus/build-data.js",
-    "backtest": "npm run build && node dist/backtest/backtest.js",
-    "score": "npm run build && node dist/backtest/score-predictions.js",
-    "queue": "npm run build && node dist/backtest/queue-recovery.js",
+    "build": "node tools/clean-build.mjs && tsc",
+    "collect": "npm run build && node dist/tools/collector/src/collector.js",
+    "build:data": "npm run build && node dist/apps/web/scripts/build-data.js",
+    "backtest": "npm run build && node dist/research/backtest/src/backtest.js",
+    "score": "npm run build && node dist/research/backtest/src/score-predictions.js",
+    "queue": "npm run build && node dist/research/backtest/src/queue-recovery.js",
     "test": "npm run build && node --test \"dist/**/*.test.js\"",
-    "budget": "npm run build && node scripts/call-budget.mjs",
-    "build:site": "node scripts/build-site.mjs",
-    "retention": "node scripts/retention.mjs"
+    "budget": "npm run build && node tools/collector/scripts/call-budget.mjs",
+    "check:docs": "node tools/check-doc-links.mjs",
+    "assemble:site": "node apps/web/scripts/assemble-site.mjs",
+    "build:site": "node apps/web/scripts/build-site.mjs",
+    "retention": "node research/analytics/retention.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
