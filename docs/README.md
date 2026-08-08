@@ -38,7 +38,8 @@
 | 하려는 일 | 읽을 것 |
 |---|---|
 | 제품이 왜 필요한지 알고 싶다 | [제품 개요](product/overview.md) |
-| 코드를 고치려 한다 | [아키텍처](architecture.md) |
+| 화면에 뜨는 값이 무슨 뜻인지 알고 싶다 | [화면 값 사전](model/screen-values.md) |
+| 코드 구조를 알고 싶다 | [아키텍처](architecture.md) |
 | 배포나 수집을 맡았다 | [수집기 운영](operations/collector.md) |
 | 이 숫자를 믿어도 되는지 알고 싶다 | [제품 개요](product/overview.md)의 현재 검증 수준 |
 

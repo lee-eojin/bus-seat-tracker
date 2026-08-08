@@ -330,6 +330,8 @@ range = 3~8명
 
 ## 코드 지도
 
+화면에 뜨는 값의 정의만 필요하면 [화면 값 사전](screen-values.md)이 더 짧다.
+
 | 관심사 | 위치 | 주요 함수와 상수 |
 |---|---|---|
 | 시간대와 고정 도착률 표 | [`packages/domain/src/queue.ts`](../../packages/domain/src/queue.ts) | `queueWindowAt`, `arrivalRateAt`, `arrivalRates` |
