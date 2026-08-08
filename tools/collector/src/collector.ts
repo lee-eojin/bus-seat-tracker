@@ -389,7 +389,7 @@ async function collectOnce(routes: Route[], apiKey: string, hashSecret: string):
   await Promise.all(snapshots.map(appendSnapshot));
 
   const vehicleCount = snapshots.reduce((count, snapshot) => count + snapshot.vehicles.length, 0);
-  console.log(`${new Date().toLocaleTimeString('ko-KR')} ${snapshots.length}개 노선, 운행 차량 ${vehicleCount}대 저장`);
+  console.log(`${new Date().toLocaleTimeString('ko-KR')} 기준 ${snapshots.length}개 노선, 운행 차량 ${vehicleCount}대 저장`);
 
   // 실패는 성공분을 저장한 뒤에 던진다. 삼키면 워크플로의 단발 재시도와 3연속 실패
   // 알림이 부분 실패를 영영 못 보고, 던지기 전에 저장하지 않으면 성공한 호출이 버려진다.

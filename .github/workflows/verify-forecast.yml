@@ -82,7 +82,7 @@ jobs:
 
             core.summary.addHeading('날짜별 도착 좌석 MAE', 3);
             core.summary.addTable([
-              ['테스트일', '관측쌍', '만석', `배포(${shipped})`, '역산 도착', `기준선(${baseline})`].map((data) => ({ data, header: true })),
+              ['테스트일', '관측쌍', '만석', `배포(${shipped})`, '역산+도착귀속', `기준선(${baseline})`].map((data) => ({ data, header: true })),
               ...card.folds.map((fold) => [
                 fold.testDate,
                 String(fold.pairs),
