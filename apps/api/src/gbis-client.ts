@@ -1,4 +1,4 @@
-import { asList, isRecord, readIdentifier, readNumber, readUpstreamErrorEnvelope } from '../../../packages/domain/src/model.js';
+import { asList, isRecord, readGbisResultError, readIdentifier, readNumber, readUpstreamErrorEnvelope } from '../../../packages/domain/src/model.js';
 
 // GBIS 클라이언트 (서버 전용).
 //
@@ -109,6 +109,13 @@ export async function fetchLiveSnapshot(routeName: string, apiKey: string): Prom
   if (envelope) {
     // 23은 초당 호출 허용량 초과라 곧 풀린다. 그 밖은 키, 권한, 한도 문제라 사람이 봐야 한다.
     throw new GbisError(`GBIS가 오류를 반환했습니다 (${envelope.code})`, envelope.code === '23' ? 429 : 502);
+  }
+
+  // GBIS 자체 결과 코드도 본다. 명세상 0이 정상, 4가 결과 없음이고 나머지는 오류다.
+  // 1(시스템 에러)을 통과시키면 차량 0대가 정상 응답으로 캐시된다.
+  const resultError = readGbisResultError(payload);
+  if (resultError) {
+    throw new GbisError(`GBIS가 결과 코드 ${resultError.code}을 반환했습니다`, 502);
   }
 
   const vehicles = readItems(payload, ['busLocationList', 'busLocation'])

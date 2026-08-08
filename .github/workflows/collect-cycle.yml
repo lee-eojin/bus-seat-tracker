@@ -239,7 +239,7 @@ jobs:
         with:
           github-token: ${{ secrets.BUS_DATA_REPO_TOKEN }}
           script: |
-            const { execFileSync } = require('node:child_process');
+            const { spawnSync } = require('node:child_process');
             const fs = require('node:fs/promises');
             const path = require('node:path');
 
@@ -276,7 +276,13 @@ jobs:
             let oneShotMode = false;
             let cycleSucceeded = false;
             let cycleAttempted = false;
-            const eventDuration = Number(process.env.EVENT_DURATION_MINUTES || '');
+            const rawDuration = (process.env.EVENT_DURATION_MINUTES ?? '').trim();
+            const eventDuration = rawDuration === '' ? 0 : Number(rawDuration);
+            // 숫자가 아니거나 음수면 조용히 일반 모드로 흘려보내지 않는다. 손으로 넣는 값이라
+            // 오타가 그대로 통과하면 의도한 이벤트 수집이 아예 일어나지 않는다.
+            if (rawDuration !== '' && (!Number.isFinite(eventDuration) || eventDuration <= 0)) {
+              throw new Error(`이벤트 수집 시간은 양수여야 합니다: ${rawDuration}`);
+            }
             if (eventDuration > 0) {
               eventMode = true;
               // 손으로 넣는 값이라 검증한다. 음수 간격이 들어오면 sleep이 즉시 풀려 GBIS를
@@ -372,6 +378,8 @@ jobs:
             let abortReason = null;
             let abortKind = null;
             let lastFailureKind = null;
+            let lastFailureDetail = '';
+            let lastCycleFailed = false;
             let sawActionable = false;
 
             // 사람이 손대야 한다고 한번 정해지면 저절로 낫는 실패가 그걸 되돌리지 못한다.
@@ -385,26 +393,36 @@ jobs:
               abortKind = kind;
             };
 
-            // 자식 stderr를 잡아 둔다. stdio를 통째로 inherit하면 error.message가
+            // spawnSync로 돌린다. execFileSync는 성공했을 때 stderr를 돌려주지 않아 캐시 폴백이나
+            // 노선 제외 경고가 사라지고, stdio를 통째로 inherit하면 실패했을 때 error.message가
             // `Command failed: node ...`로 끝나 원인 체인이 애노테이션과 요약에 남지 않는다.
-            const failureDetail = (error) => {
-              const output = error.stderr ? error.stderr.toString().trim() : '';
+            function runCollector() {
+              const result = spawnSync('node', ['dist/tools/collector/src/collector.js', '--once'], {
+                cwd: workspace,
+                stdio: ['ignore', 'inherit', 'pipe'],
+                env: process.env,
+                encoding: 'utf8',
+              });
+              const output = (result.stderr ?? '').trim();
+              // 성공이든 실패든 남긴다. 캐시로 되돌아간 노선이나 빠진 노선은 성공 사이클에서만 보인다.
               if (output) core.info(output);
-              const lastLine = output.split('\n').map((line) => line.trim()).filter(Boolean).pop();
-              return lastLine || error.message;
-            };
+              if (result.error) throw result.error;
+              if (result.status !== 0) {
+                const lastLine = output.split('\n').map((line) => line.trim()).filter(Boolean).pop();
+                const failure = new Error(lastLine || `수집기가 종료 코드 ${result.status}로 끝났다`);
+                failure.status = result.status;
+                throw failure;
+              }
+            }
 
             do {
               cycleAttempted = true;
               try {
-                execFileSync('node', ['dist/tools/collector/src/collector.js', '--once'], {
-                  cwd: workspace,
-                  stdio: ['ignore', 'inherit', 'pipe'],
-                  env: process.env,
-                });
+                runCollector();
                 await uploadChangedFiles();
                 consecutiveFailures = 0;
                 cycleSucceeded = true;
+                lastCycleFailed = false;
                 if (oneShotMode) break;
               } catch (error) {
                 // 사이클이 실패해도 그 전에 저장된 성공 노선의 스냅샷은 올린다.
@@ -423,11 +441,13 @@ jobs:
                   }
                 }
                 consecutiveFailures += 1;
-                // execFileSync는 status에 종료 코드(0~255)를 담고 octokit HttpError는 HTTP 상태를
+                lastCycleFailed = true;
+                // 수집기는 status에 종료 코드(0~255)를 담고 octokit HttpError는 HTTP 상태를
                 // 담는다. 값 범위가 겹치지 않아 한 속성으로 둘 다 읽을 수 있다.
                 lastFailureKind = error.status === transientExitCode ? 'transient' : 'actionable';
                 if (lastFailureKind === 'actionable') sawActionable = true;
-                const detail = failureDetail(error);
+                const detail = error.message;
+                lastFailureDetail = detail;
                 if (error.status === 401 || error.status === 403) {
                   noteAbort('actionable', `데이터 저장소 인증 실패(${error.status}). BUS_DATA_REPO_TOKEN을 갱신한다 — docs/operations/deployment.md: ${error.message}`);
                 } else if (consecutiveFailures >= maxConsecutiveFailures) {
@@ -442,7 +462,10 @@ jobs:
                 await sleep(loopStartMs - now);
                 continue;
               }
-              const intervalSeconds = oneShotMode ? 45 : (eventIntervalSeconds ?? scheduledIntervalSeconds(now));
+              // 연속 실패 중에는 정규 간격을 기다리지 않는다. 낮 20분 간격이면 3회 실패까지
+              // 40분이 흐른 뒤에야 새 러너로 넘어가는데, 그건 막힌 러너 앞에서 기다리는 시간일 뿐이다.
+              const normalInterval = oneShotMode ? 45 : (eventIntervalSeconds ?? scheduledIntervalSeconds(now));
+              const intervalSeconds = consecutiveFailures > 0 ? Math.min(normalInterval, 45) : normalInterval;
               if (now + intervalSeconds * 1000 >= loopEndMs) break;
               await sleep(intervalSeconds * 1000);
             } while (Date.now() < loopEndMs);
@@ -452,7 +475,10 @@ jobs:
             } else if (cycleAttempted && !cycleSucceeded) {
               // 한 건도 못 남겼는데 초록으로 끝나는 구멍을 막는다. 예전에는 이 검사가 단발
               // 모드에만 걸려 있어, 창 안 실행이 상류 실패로 전멸해도 성공으로 표시됐다.
-              finish(lastFailureKind ?? 'actionable', '이번 실행은 스냅샷을 한 건도 남기지 못했다. 이 시간대 관측이 비었다');
+              finish(lastFailureKind ?? 'actionable', `이번 실행은 스냅샷을 한 건도 남기지 못했다. 이 시간대 관측이 비었다: ${lastFailureDetail}`);
+            } else if (lastCycleFailed) {
+              // 창이 끝날 때 마지막 사이클이 실패했다. 앞선 성공이 이 상태를 덮으면 안 된다.
+              finish(lastFailureKind ?? 'actionable', `창이 끝날 때 마지막 사이클이 실패했다: ${lastFailureDetail}`);
             } else {
               // 중간에 조치가 필요한 실패가 있었는데 뒤 사이클이 성공해 덮인 경우다. 실행을
               // 빨갛게 만들 만큼은 아니지만 흔적 없이 지나가면 안 된다.

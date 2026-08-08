@@ -251,6 +251,33 @@ export function readUpstreamErrorEnvelope(payload: unknown): UpstreamErrorEnvelo
   };
 }
 
+/**
+ * GBIS 자체 결과 코드가 오류를 말하고 있으면 그 값을 돌려준다. 정상이면 null이다.
+ *
+ * 명세의 코드표는 0 정상, 1 시스템 에러, 2 필수 파라미터 누락, 4 결과 없음이다.
+ * 4는 그 시각에 운행 차량이 없다는 뜻이라 오류가 아니다. 나머지 0이 아닌 값은 오류인데,
+ * 이걸 통과시키면 항목 목록이 비어 "차량 0대"가 정상 관측으로 저장된다.
+ *
+ * 포털 공통 코드표(readUpstreamErrorEnvelope)와는 별개의 숫자 체계다. 섞어 쓰면 안 된다.
+ */
+export function readGbisResultError(payload: unknown): UpstreamErrorEnvelope | null {
+  if (!isRecord(payload)) return null;
+  const response = isRecord(payload.response) ? payload.response : null;
+  const header = response && isRecord(response.msgHeader)
+    ? response.msgHeader
+    : isRecord(payload.msgHeader)
+      ? payload.msgHeader
+      : null;
+  if (!header) return null;
+
+  const rawCode = header.resultCode;
+  if (rawCode === undefined || rawCode === null) return null;
+  const code = String(rawCode).trim();
+  if (code === '' || Number(code) === 0 || Number(code) === 4) return null;
+
+  return { code, message: readIdentifier(header.resultMessage) ?? readIdentifier(header.resultMsg) ?? '' };
+}
+
 export function readRouteCache(value: unknown): RouteCache | null {
   if (!isRecord(value)) return null;
   const cachedAt = readString(value.cachedAt);

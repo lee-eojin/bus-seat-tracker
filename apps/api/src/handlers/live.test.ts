@@ -134,3 +134,41 @@ describe('/api/live 상류 오류 처리', () => {
     assert.match(state.headers['Cache-Control'] ?? '', /public, s-maxage=/);
   });
 });
+
+describe('/api/live GBIS 결과 코드', () => {
+  // 명세: 0 정상, 1 시스템 에러, 4 결과 없음. 1을 통과시키면 차량 0대가 정상 응답으로 캐시된다.
+  async function callWithBody(body: unknown) {
+    const originalFetch = globalThis.fetch;
+    const originalKey = process.env.GYEONGGI_BUS_API_KEY;
+    process.env.GYEONGGI_BUS_API_KEY = 'test-key';
+    globalThis.fetch = (async () => new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })) as typeof globalThis.fetch;
+    try {
+      const { request, response, state } = fakeExchange('GET', '/api/live?route=3330');
+      await handler(request, response);
+      return state;
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalKey === undefined) delete process.env.GYEONGGI_BUS_API_KEY;
+      else process.env.GYEONGGI_BUS_API_KEY = originalKey;
+    }
+  }
+
+  it('시스템 에러를 캐시하지 않고 오류로 올린다', async () => {
+    const state = await callWithBody({
+      response: { msgHeader: { resultCode: 1, resultMessage: '시스템 에러가 발생하였습니다.' } },
+    });
+    assert.equal(state.status, 502);
+    assert.equal(state.headers['Cache-Control'], 'no-store');
+  });
+
+  it('결과 없음은 정상이라 캐시한다', async () => {
+    const state = await callWithBody({
+      response: { msgHeader: { resultCode: 4, resultMessage: '결과가 존재하지 않습니다.' }, msgBody: {} },
+    });
+    assert.equal(state.status, 200);
+    assert.match(state.headers['Cache-Control'] ?? '', /public, s-maxage=/);
+  });
+});

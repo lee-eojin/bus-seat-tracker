@@ -2,8 +2,8 @@ import { createHmac } from 'node:crypto';
 import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { asList, isNonBoardingStop, isRecord, readIdentifier, readNumber, readRouteCache, readUpstreamErrorEnvelope, type Route, type RouteCache, type RouteStop, type Snapshot, type VehicleSnapshot } from '../../../packages/domain/src/model.js';
-import { classifyFailure, describeFailure, readResultNotice, toSingleCause, transientExitCode, UpstreamFailure } from './failure-kind.js';
+import { asList, isNonBoardingStop, isRecord, readIdentifier, readNumber, readGbisResultError, readRouteCache, readUpstreamErrorEnvelope, type Route, type RouteCache, type RouteStop, type Snapshot, type VehicleSnapshot } from '../../../packages/domain/src/model.js';
+import { classifyFailure, describeFailure, toSingleCause, transientExitCode, UpstreamFailure } from './failure-kind.js';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(currentDirectory, '..', '..', '..', '..');
@@ -169,10 +169,15 @@ async function requestApi(apiPath: string, parameters: Record<string, string>, a
     });
   }
 
-  // GBIS 자체 결과 코드는 의미를 아직 모른다. 판정하지 않고 기록만 남겨 실제 값을 모은다.
-  const notice = readResultNotice(payload);
-  if (notice) {
-    console.warn(`상류 결과 코드 ${notice.code} (${apiPath}): ${notice.message}`);
+  // GBIS 자체 결과 코드도 본다. 명세상 0이 정상이고 4가 결과 없음이며, 나머지는 오류다.
+  // 통과시키면 항목 목록이 비어 "운행 차량 0대 저장"이 정상 관측으로 남는다.
+  const resultError = readGbisResultError(payload);
+  if (resultError) {
+    throw new UpstreamFailure(`상류가 결과 코드 ${resultError.code}을 반환했습니다 (${apiPath}): ${resultError.message}`, {
+      httpStatus: response.status,
+      upstreamCode: resultError.code,
+      codeSpace: 'gbis',
+    });
   }
 
   return payload;
