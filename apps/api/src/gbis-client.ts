@@ -1,4 +1,4 @@
-import { asList, isRecord, readIdentifier, readNumber } from '../../../packages/domain/src/model.js';
+import { asList, isRecord, readIdentifier, readNumber, readUpstreamErrorEnvelope } from '../../../packages/domain/src/model.js';
 
 // GBIS 클라이언트 (서버 전용).
 //
@@ -63,6 +63,19 @@ function readVehicle(value: unknown): LiveVehicle | null {
   };
 }
 
+// undici는 연결 단계 실패를 전부 `TypeError: fetch failed`로 감싸므로 name만 남기면 정보가 0이다.
+// 원인 체인에서 코드와 이름만 뽑는다. 메시지에는 요청 URL이 섞일 수 있어 넣지 않는다.
+function failureCodes(error: unknown): string {
+  const codes: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; current instanceof Error && depth < 5; depth += 1) {
+    const code = (current as { code?: unknown }).code;
+    codes.push(typeof code === 'string' && code !== '' ? code : current.name);
+    current = current.cause;
+  }
+  return codes.join(' ← ') || 'unknown';
+}
+
 export async function fetchLiveSnapshot(routeName: string, apiKey: string): Promise<LiveSnapshot> {
   const routeId = allowedRoutes[routeName];
   if (!routeId) throw new GbisError(`허용되지 않은 노선입니다: ${routeName}`, 400);
@@ -75,7 +88,7 @@ export async function fetchLiveSnapshot(routeName: string, apiKey: string): Prom
     response = await fetch(requestUrl, { signal: AbortSignal.timeout(requestTimeoutMs) });
   } catch (error: unknown) {
     // 타임아웃·네트워크 오류를 502로 정규화한다. GBIS 원문을 그대로 흘리면 키가 섞일 수 있다.
-    throw new GbisError(`GBIS 응답을 받지 못했습니다: ${error instanceof Error ? error.name : 'unknown'}`, 502);
+    throw new GbisError(`GBIS 응답을 받지 못했습니다: ${failureCodes(error)}`, 502);
   }
 
   const responseText = await response.text();
@@ -87,6 +100,15 @@ export async function fetchLiveSnapshot(routeName: string, apiKey: string): Prom
   } catch {
     // 키 만료·한도 초과 시 GBIS가 XML 오류를 돌려준다. 본문을 그대로 노출하지 않는다.
     throw new GbisError('GBIS가 JSON을 반환하지 않았습니다. 키 또는 호출 한도를 확인하세요.', 502);
+  }
+
+  // 상류는 키나 한도 오류를 HTTP 200 본문에 담아 보내기도 한다. 이걸 보지 않으면 항목 목록이
+  // 비어 "운행 중인 차량이 없습니다"가 정상 응답으로 120초 캐시된다. 화면은 그동안 "실시간"이라
+  // 말하면서 틀린 답을 보여준다. 오류로 올려야 핸들러가 캐시하지 않는다.
+  const envelope = readUpstreamErrorEnvelope(payload);
+  if (envelope) {
+    // 23은 초당 호출 허용량 초과라 곧 풀린다. 그 밖은 키, 권한, 한도 문제라 사람이 봐야 한다.
+    throw new GbisError(`GBIS가 오류를 반환했습니다 (${envelope.code})`, envelope.code === '23' ? 429 : 502);
   }
 
   const vehicles = readItems(payload, ['busLocationList', 'busLocation'])
