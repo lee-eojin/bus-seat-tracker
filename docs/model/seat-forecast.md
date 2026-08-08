@@ -284,10 +284,10 @@ lowConfidence = true
 | 관심사 | 위치 | 주요 함수 |
 |---|---|---|
 | 관측 정리와 운행 분할 | [`packages/domain/src/profile.ts`](../../packages/domain/src/profile.ts) | `observationsByVehicle`, `splitRuns` |
-| 균등 배분 프로파일 | 같은 파일 | `buildProfileRoute` |
-| 구간합 역산 프로파일 | 같은 파일 | `buildDeconvolvedProfileRoute`, `solveSpanSums` |
-| 셀 조회와 저신뢰 처리 | 같은 파일 | `netDemandAt` |
-| 좌석 확률분포 전파 | 같은 파일 | `pointDistribution`, `applyNetDemand`, `distributionMean`, `distributionQuantile` |
+| 균등 배분 프로파일 | [`packages/domain/src/profile.ts`](../../packages/domain/src/profile.ts) | `buildProfileRoute` |
+| 구간합 역산 프로파일 | [`packages/domain/src/profile.ts`](../../packages/domain/src/profile.ts) | `buildDeconvolvedProfileRoute`, `solveSpanSums` |
+| 셀 조회와 저신뢰 처리 | [`packages/domain/src/profile.ts`](../../packages/domain/src/profile.ts) | `netDemandAt` |
+| 좌석 확률분포 전파 | [`packages/domain/src/profile.ts`](../../packages/domain/src/profile.ts) | `pointDistribution`, `applyNetDemand`, `distributionMean`, `distributionQuantile` |
 | 화면과 발행용 차량 예보 조립 | [`packages/domain/src/forecast.ts`](../../packages/domain/src/forecast.ts) | `forecastVehicleStops` |
 | 화면에 배포할 프로파일 생성 | [`apps/web/scripts/build-data.ts`](../../apps/web/scripts/build-data.ts) | `buildDeconvolvedProfileRoute(..., 'arrival')` 호출부 |
 | 과거 데이터 rolling-origin 검증 | [`research/backtest/src/backtest.ts`](../../research/backtest/src/backtest.ts) | `runFold`, `propagateProfile`, `buildScorecard` |
