@@ -40,7 +40,8 @@
 | 제품이 왜 필요한지 알고 싶다 | [제품 개요](product/overview.md) |
 | 코드를 고치려 한다 | [아키텍처](architecture.md) |
 | 배포나 수집을 맡았다 | [수집기 운영](operations/collector.md) |
+| 이 숫자를 믿어도 되는지 알고 싶다 | [제품 개요](product/overview.md)의 현재 검증 수준 |
 
-수학은 필요할 때만 본다. 화면, 수집기, 워크플로를 고치는 데는 수식을 몰라도 된다. 판정 규칙 자체를 바꿀 때 [모델 개념](model/concepts.md)부터 읽는다. 기호와 수식을 한 흐름으로 보고 싶으면 [수학 입문서](model/mathematical-primer.md)가 그 용도다.
+수학은 필요할 때만 본다. 화면, 수집기, 워크플로를 고치는 데는 수식을 몰라도 된다. 판정 규칙 자체를 바꿀 때는 [탑승 판정](model/boarding-verdict.md)으로 바로 간다. 배경 개념이 필요해지면 [모델 개념](model/concepts.md)이 그 자리다. 기호와 수식을 한 흐름으로 보고 싶으면 [수학 입문서](model/mathematical-primer.md)가 그 용도다.
 
 문서 전체 목록과 디렉터리별 역할은 [문서 지도](map.md)에 있다.

@@ -269,14 +269,15 @@ MAE만 보면 +1이 근소하게 낮지만 상관은 이동 없음이 가장 높
 | 관심사 | 위치 | 주요 함수와 상수 |
 |---|---|---|
 | 승차 인원과 큐 해소 해석 | [`packages/domain/src/boarding.ts`](../../packages/domain/src/boarding.ts) | `boardedAt`, `departedWithSeats`, `queueStatement` |
-| 만석 연속 계산 | 같은 파일 | `nextFullDepartureStreak`, `fullDepartureStreaks` |
+| 만석 연속 계산 | [`packages/domain/src/boarding.ts`](../../packages/domain/src/boarding.ts) | `nextFullDepartureStreak`, `fullDepartureStreaks` |
 | 화면 데이터 생성 시점의 만석 연속 조립 | [`apps/web/scripts/build-data.ts`](../../apps/web/scripts/build-data.ts) | `buildOnce`, `streakWindowMinutes` |
-| 기대 수요 우회 | 같은 파일 | `expectedDemandAt` |
-| 3단계 판정과 10석 여유폭 | 같은 파일 | `boardingVerdict`, `verdictSeatMargin` |
+| 기대 수요 우회 | [`packages/domain/src/boarding.ts`](../../packages/domain/src/boarding.ts) | `expectedDemandAt` |
+| 3단계 판정과 10석 여유폭 | [`packages/domain/src/boarding.ts`](../../packages/domain/src/boarding.ts) | `boardingVerdict`, `verdictSeatMargin` |
 | 판정 입력인 순수요 조회 | [`packages/domain/src/profile.ts`](../../packages/domain/src/profile.ts) | `netDemandAt` |
-| 화면 예보와 판정 조립 | [`apps/web/src/app.ts`](../../apps/web/src/app.ts) | `forecastVehicle` |
-| 과거 만석 빈도 기반 상류 추천 | 같은 파일 | `recommendationFor`, `fullRate`, `probabilityPhrase` |
-| 결론 카드와 배지 표시 | 같은 파일 | `renderConclusion`, `renderAxis`, `conclusionHeadlines`, `verdictLabels` |
+| 화면 예보와 판정 조립 | [`apps/web/src/app.ts`](../../apps/web/src/app.ts) | `forecastVehicle` (계산 본체는 `packages/domain/src/forecast.ts`의 `forecastVehicleStops`) |
+| 상류 추천 규칙 | [`packages/domain/src/recommendation.ts`](../../packages/domain/src/recommendation.ts) | `recommendBoardingStop`, `fullObservationRate`, `recommendationMinSamples` |
+| 상류 추천 표시 | [`apps/web/src/app.ts`](../../apps/web/src/app.ts) | `recommendationFor`, `probabilityPhrase` |
+| 결론 카드와 배지 표시 | [`apps/web/src/app.ts`](../../apps/web/src/app.ts) | `renderConclusion`, `renderAxis`, `conclusionHeadlines`, `verdictLabels` |
 | 통과 기록 판정 검증 | [`research/backtest/src/queue-recovery.ts`](../../research/backtest/src/queue-recovery.ts) | `--verdict` 실행 경로 |
 
 ## 재현 명령

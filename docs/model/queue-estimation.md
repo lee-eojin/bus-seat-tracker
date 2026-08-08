@@ -333,15 +333,15 @@ range = 3~8명
 | 관심사 | 위치 | 주요 함수와 상수 |
 |---|---|---|
 | 시간대와 고정 도착률 표 | [`packages/domain/src/queue.ts`](../../packages/domain/src/queue.ts) | `queueWindowAt`, `arrivalRateAt`, `arrivalRates` |
-| 보존식 계산 | 같은 파일 | `estimateQueue` |
-| 고정 ±35% 범위 | 같은 파일 | `queueRange` |
+| 보존식 계산 | [`packages/domain/src/queue.ts`](../../packages/domain/src/queue.ts) | `estimateQueue` |
+| 고정 ±35% 범위 | [`packages/domain/src/queue.ts`](../../packages/domain/src/queue.ts) | `queueRange` |
 | 큐 해소, 통과별 정확값과 하한 | [`packages/domain/src/boarding.ts`](../../packages/domain/src/boarding.ts) | `boardedAt`, `departedWithSeats`, `queueStatement` |
 | 세션 해소 추적 | [`apps/web/src/app.ts`](../../apps/web/src/app.ts) | `trackClearings`, `lastClearingAt` |
 | 해소 감지, 하류 위치 추론, 근거 선택 | [`packages/domain/src/queue.ts`](../../packages/domain/src/queue.ts) | `detectLiveClearing`, `inferQueueClearing`, `selectQueueClearing` |
-| 화면 계산과 문구 | 같은 파일 | `queueAt`, `queueLabel` |
+| 화면 계산과 문구 | [`apps/web/src/app.ts`](../../apps/web/src/app.ts) | `queueAt`, `queueLabel` |
 | 오프라인 `λ` 복원 | [`research/backtest/src/queue-recovery.ts`](../../research/backtest/src/queue-recovery.ts) | `passesForDay`, `intervalsOf` |
-| 상류 오염 보정 | 같은 파일 | `propagateToStop` |
-| 날짜별 분산 측정 | 같은 파일 | `--all-stops --by-day` 실행 경로 |
+| 상류 오염 보정 | [`research/backtest/src/queue-recovery.ts`](../../research/backtest/src/queue-recovery.ts) | `propagateToStop` |
+| 날짜별 분산 측정 | [`research/backtest/src/queue-recovery.ts`](../../research/backtest/src/queue-recovery.ts) | `--all-stops --by-day` 실행 경로 |
 
 ## 재현 명령
 
