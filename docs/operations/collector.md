@@ -18,7 +18,8 @@
 
 | 역할 | 파일 |
 |---|---|
-| 예약 실행, 일별 브랜치 보관, 재시도 | [`.github/workflows/collect-bus-seats.yml`](../../.github/workflows/collect-bus-seats.yml) |
+| 예약 실행과 새 러너 재시도 | [`.github/workflows/collect-bus-seats.yml`](../../.github/workflows/collect-bus-seats.yml) |
+| 수집 한 판 (보관, 브랜치 준비, 수집 루프) | [`.github/workflows/collect-cycle.yml`](../../.github/workflows/collect-cycle.yml) |
 | 시간대·간격·운행 시간 판정 | [`tools/collector/src/schedule.ts`](../../tools/collector/src/schedule.ts) |
 | GBIS 호출, 노선 캐시, JSONL 저장 | [`tools/collector/src/collector.ts`](../../tools/collector/src/collector.ts) |
 | 호출 수 계산 | [`tools/collector/scripts/call-budget.mjs`](../../tools/collector/scripts/call-budget.mjs) |
@@ -152,13 +153,60 @@ npm run collect -- --once --refresh-routes
 | 실패 | 동작 |
 |---|---|
 | 데이터 저장소 401·403 | 첫 실패에서 루프 중단, 잡 실패 |
-| 그 밖의 창 루프 오류 | 연속 3회까지 보고 중단, 잡 실패 |
-| 창 밖 단발 수집 오류 | 45초 간격으로 최대 3분 재시도 |
+| 그 밖의 사이클 오류 | 연속 3회에서 루프 중단, 성격에 따라 잡 실패 또는 경고 |
+| 창 밖 단발 수집 오류 | 45초 간격으로 최대 3회 재시도 |
 | 실패 사이클 안의 일부 노선 성공 | 성공 파일을 먼저 업로드한 뒤 실패 처리 |
+| 저절로 낫는 실패로 한 건도 못 건짐 | 새 러너에서 한 판 더 (`retry-on-fresh-runner`) |
 | GitHub API 429·5xx | 보관·브랜치 준비 단계에서 최대 5회, 15·30·45·60초 간격 재시도 |
 
 인증 실패를 오래 재시도하지 않는 이유는 호출 순서 때문이다. GBIS를 먼저 호출하고 그다음 파일을
 올리므로, 저장소 토큰이 죽은 상태에서 반복하면 좌석 API 쿼터만 사라진다.
+
+### 실패의 성격 구분
+
+같은 빨간불이라도 사람이 할 수 있는 일이 있는 실패와 없는 실패는 다르다. 판단 규칙은
+[`tools/collector/src/failure-kind.ts`](../../tools/collector/src/failure-kind.ts)에 있고,
+수집기가 종료 코드로 알린다. 저절로 낫는 실패면 10, 그 밖에는 1이다.
+
+| 성격 | 예 | 실행 결과 |
+|---|---|---|
+| 저절로 낫는다 | 연결 타임아웃(`UND_ERR_CONNECT_TIMEOUT`), 소켓 끊김, 상류 5xx와 429, 요청 예산 초과 | 경고와 실행 요약. 새 러너에서 한 판 더 |
+| 사람이 손대야 한다 | 서비스키 미등록과 기한만료, 호출 한도 소진, 401과 403, 데이터 저장소 토큰 만료 | 잡 실패 |
+
+분류는 화이트리스트다. 자가 치유가 확실한 갈래만 경고로 내리고 모르는 실패는 전부 잡 실패로
+남긴다. 반대로 두면 키가 죽은 날 아무도 모른다.
+
+원인은 `error.cause` 체인을 끝까지 펼쳐 한 줄로 남긴다. 예전에는 메시지만 읽어서
+`TypeError: fetch failed`에서 끊겼고, 알림에는 `Command failed: node .../collector.js --once`만
+떴다. 지금은 이렇게 나온다.
+
+```
+수집기를 시작하지 못했습니다 [transient]: 수집할 노선을 하나도 확인하지 못했습니다: 3330, 1650번
+  ← 상류에 연결하지 못했습니다 (/busrouteservice/v2/getBusRouteListv2)
+  ← The operation was aborted due to timeout
+```
+
+상류가 HTTP 200 본문에 오류를 담아 보내는 경우도 검사한다. 이걸 보지 않으면 항목 목록이 비어
+"운행 차량 0대 저장"으로 성공 집계되고 빈 스냅샷이 정상 관측으로 남는다. 운행 차량이 없다는
+응답(`NODATA`, 사유 코드 03)은 오류가 아니라 정상이다.
+
+### 새 러너 재시도
+
+GBIS 연결 실패는 상류가 아니라 러너의 송신 경로 문제다. 2026-08-07 11:21:11Z에 한 러너가 51대를
+정상 수신하는 동안 같은 순간 다른 러너는 두 노선 모두 연결에 실패했다. 첫 사이클에 연결된 러너의
+이후 실패율은 0.11%인데 첫 사이클 실패율은 11%다. 한번 막힌 러너는 끝까지 막혀 있어서, 같은
+잡 안에서 더 재시도해도 소용이 없다.
+
+그래서 수집 한 판을 [`collect-cycle.yml`](../../.github/workflows/collect-cycle.yml)로 떼고,
+저절로 낫는 실패로 한 건도 못 건지면 별도 잡에서 한 번 더 부른다. 별도 잡이라야 새 러너가
+배정된다. 재시도는 한 번뿐이고, 두 번째도 실패하면 경고만 남는다. 그 시점엔 사람이 할 수 있는
+일이 없기 때문이다.
+
+### 요청 타임아웃
+
+성공 사이클은 두 노선을 합쳐 0.9\~1.6초에 끝난다. 요청 예산은 6초이고 `GBIS_REQUEST_TIMEOUT_MS`로
+바꾼다. 예전 15초는 undici의 기본 연결 타임아웃(10초)에 밀려 연결 단계에서 발화조차 못 하던
+죽은 예산이었다.
 
 ## 일별 브랜치와 보관
 
