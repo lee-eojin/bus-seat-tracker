@@ -84,3 +84,53 @@ describe('/api/live 거부 경로', () => {
   });
 
 });
+
+describe('/api/live 상류 오류 처리', () => {
+  // 상류는 키나 한도 오류를 HTTP 200 본문에 담아 보내기도 한다. 이걸 통과시키면 차량 0대가
+  // 정상 응답으로 120초 캐시되고, 화면은 "실시간"이라 말하면서 "운행 중인 차량이 없습니다"를
+  // 보여준다. 사용자가 보는 답이 틀리는 경로라 캐시하지 않고 오류로 올려야 한다.
+  async function callWithUpstreamBody(body: unknown, status = 200) {
+    const originalFetch = globalThis.fetch;
+    const originalKey = process.env.GYEONGGI_BUS_API_KEY;
+    process.env.GYEONGGI_BUS_API_KEY = 'test-key';
+    globalThis.fetch = (async () => new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    })) as typeof globalThis.fetch;
+    try {
+      const { request, response, state } = fakeExchange('GET', '/api/live?route=3330');
+      await handler(request, response);
+      return state;
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalKey === undefined) delete process.env.GYEONGGI_BUS_API_KEY;
+      else process.env.GYEONGGI_BUS_API_KEY = originalKey;
+    }
+  }
+
+  it('200에 담겨 온 한도 초과를 캐시하지 않고 오류로 올린다', async () => {
+    const state = await callWithUpstreamBody({
+      OpenAPI_ServiceResponse: {
+        cmmMsgHeader: { returnReasonCode: '22', returnAuthMsg: '서비스 요청제한횟수 초과' },
+      },
+    });
+    assert.equal(state.status, 502);
+    assert.equal(state.headers['Cache-Control'], 'no-store');
+  });
+
+  it('초당 한도 초과는 429로 구분한다', async () => {
+    const state = await callWithUpstreamBody({
+      OpenAPI_ServiceResponse: { cmmMsgHeader: { returnReasonCode: '23', returnAuthMsg: '초당 허용량 초과' } },
+    });
+    assert.equal(state.status, 429);
+    assert.equal(state.headers['Cache-Control'], 'no-store');
+  });
+
+  it('정상 응답은 캐시한다', async () => {
+    const state = await callWithUpstreamBody({
+      response: { msgHeader: { queryTime: '2026-08-08 21:00:00' }, msgBody: { busLocationList: [] } },
+    });
+    assert.equal(state.status, 200);
+    assert.match(state.headers['Cache-Control'] ?? '', /public, s-maxage=/);
+  });
+});

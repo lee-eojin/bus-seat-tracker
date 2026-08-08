@@ -2,7 +2,8 @@ import { createHmac } from 'node:crypto';
 import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { asList, isNonBoardingStop, isRecord, readIdentifier, readNumber, readRouteCache, type Route, type RouteCache, type RouteStop, type Snapshot, type VehicleSnapshot } from '../../../packages/domain/src/model.js';
+import { asList, isNonBoardingStop, isRecord, readIdentifier, readNumber, readRouteCache, readUpstreamErrorEnvelope, type Route, type RouteCache, type RouteStop, type Snapshot, type VehicleSnapshot } from '../../../packages/domain/src/model.js';
+import { classifyFailure, describeFailure, readResultNotice, toSingleCause, transientExitCode, UpstreamFailure } from './failure-kind.js';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(currentDirectory, '..', '..', '..', '..');
@@ -107,17 +108,74 @@ function getQueryTime(payload: unknown): string | null {
   return header ? readIdentifier(header.queryTime) : null;
 }
 
+// 성공 사이클은 두 노선을 합쳐 0.9~1.6초 만에 끝난다. 예전의 15초는 연결이 막힌 러너에서
+// undici의 기본 연결 타임아웃(10초)에 밀려 발화조차 못 하던 죽은 예산이었다. 관측된 최대치의
+// 네 배로 줄여, 막힌 경로에서 버리는 시간을 10.5초에서 6초로 낮춘다.
+const requestTimeoutMs = Number(process.env.GBIS_REQUEST_TIMEOUT_MS ?? 6_000);
+
+/** 오류 본문에 키가 섞여 나올 경우를 대비해 지운다. 로그는 공개 저장소의 실행 기록에 남는다. */
+function redactKey(text: string, apiKey: string): string {
+  return apiKey ? text.split(apiKey).join('***') : text;
+}
+
 async function requestApi(apiPath: string, parameters: Record<string, string>, apiKey: string): Promise<unknown> {
   const requestUrl = new URL(apiBaseUrl + apiPath);
   requestUrl.search = new URLSearchParams({ serviceKey: apiKey, format: 'json', ...parameters }).toString();
-  const response = await fetch(requestUrl, { signal: AbortSignal.timeout(15_000) });
-  const responseText = await response.text();
-  if (!response.ok) throw new Error(`API request failed (${response.status}): ${responseText.slice(0, 180)}`);
+
+  let response: Response;
   try {
-    return JSON.parse(responseText) as unknown;
-  } catch {
-    throw new Error(`API did not return JSON. Confirm the service key and API access: ${responseText.slice(0, 180)}`);
+    response = await fetch(requestUrl, { signal: AbortSignal.timeout(requestTimeoutMs) });
+  } catch (error: unknown) {
+    // undici는 연결 단계 실패를 전부 `TypeError: fetch failed`로 감싸고 진짜 원인을 cause에 넣는다.
+    // cause를 달아 올려야 분류가 UND_ERR_CONNECT_TIMEOUT 같은 코드를 볼 수 있다.
+    throw new UpstreamFailure(`상류에 연결하지 못했습니다 (${apiPath})`, { cause: error });
   }
+
+  const responseText = redactKey(await response.text(), apiKey);
+
+  let payload: unknown = null;
+  let parsed = true;
+  try {
+    payload = JSON.parse(responseText) as unknown;
+  } catch {
+    parsed = false;
+  }
+
+  // 상류는 키나 한도 문제를 4xx로도, HTTP 200 본문으로도 알려온다. 어느 쪽이든 같은 오류 봉투를
+  // 쓰므로 먼저 읽어 코드와 문구를 뽑는다. 200에 담겨 오는 쪽을 보지 않으면 항목 목록이 비어
+  // "운행 차량 0대 저장"으로 성공 집계되고, 빈 스냅샷이 정상 관측으로 남는다.
+  const envelope = parsed ? readUpstreamErrorEnvelope(payload) : null;
+  if (envelope) {
+    throw new UpstreamFailure(`상류가 오류를 반환했습니다 (${apiPath}): ${envelope.message}`, {
+      httpStatus: response.status,
+      upstreamCode: envelope.code,
+    });
+  }
+
+  if (!response.ok) {
+    throw new UpstreamFailure(`API request failed (${response.status}): ${responseText.slice(0, 180)}`, {
+      httpStatus: response.status,
+    });
+  }
+
+  if (!parsed) {
+    // 상류가 XML을 돌려주는 경우도 있다. 이유가 본문에 있으니 코드로 뽑아 분류에 넘긴다.
+    const marker = /<returnReasonCode>([^<]+)<\/returnReasonCode>/.exec(responseText)?.[1]
+      ?? /<returnAuthMsg>([^<]+)<\/returnAuthMsg>/.exec(responseText)?.[1]
+      ?? null;
+    throw new UpstreamFailure(`API did not return JSON. Confirm the service key and API access: ${responseText.slice(0, 180)}`, {
+      httpStatus: response.status,
+      upstreamCode: marker,
+    });
+  }
+
+  // GBIS 자체 결과 코드는 의미를 아직 모른다. 판정하지 않고 기록만 남겨 실제 값을 모은다.
+  const notice = readResultNotice(payload);
+  if (notice) {
+    console.warn(`상류 결과 코드 ${notice.code} (${apiPath}): ${notice.message}`);
+  }
+
+  return payload;
 }
 
 async function findRoute(routeName: string, apiKey: string): Promise<Route> {
@@ -231,10 +289,6 @@ function isCacheFresh(cache: RouteCache, atMs: number): boolean {
   return atMs - cachedAtMs(cache) < routeCacheHours * 3_600_000;
 }
 
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 // 노선 정보를 갱신하지 못하는 것과 좌석을 관측하지 못하는 것은 다른 사건이다.
 // busrouteservice가 한도 소진이나 장애로 막혀도, 노선 ID와 정류장 순서는 거의 변하지 않으므로
 // 만료된 캐시로 좌석 수집을 계속하는 편이 그날 표본을 통째로 버리는 것보다 낫다.
@@ -263,6 +317,7 @@ async function resolveRoutes(routeNames: string[], apiKey: string, refreshRoutes
   const cachedRoutes = await loadCachedRoutes();
   const atMs = Date.now();
   const reused: string[] = [];
+  const failures: unknown[] = [];
 
   const resolved = await Promise.all(routeNames.map(async (routeName): Promise<Route | null> => {
     const cache = cachedRoutes.get(routeName);
@@ -279,16 +334,23 @@ async function resolveRoutes(routeNames: string[], apiKey: string, refreshRoutes
       return route;
     } catch (error: unknown) {
       if (cache) {
-        console.warn(`${routeName}번 노선 정보를 갱신하지 못해 ${cache.cachedAt} 캐시로 수집합니다: ${describeError(error)}`);
+        console.warn(`${routeName}번 노선 정보를 갱신하지 못해 ${cache.cachedAt} 캐시로 수집합니다: ${describeFailure(error)}`);
         return cache.route;
       }
-      console.error(`${routeName}번 노선 정보가 없어 이번 수집에서 제외합니다: ${describeError(error)}`);
+      failures.push(error);
+      console.error(`${routeName}번 노선 정보가 없어 이번 수집에서 제외합니다: ${describeFailure(error)}`);
       return null;
     }
   }));
 
   const routes = resolved.filter((route): route is Route => route !== null);
-  if (routes.length === 0) throw new Error(`수집할 노선을 하나도 확인하지 못했습니다: ${routeNames.join(', ')}번`);
+  // 원인을 달아 올린다. 여기서 끊으면 저절로 낫는 연결 실패가 조치가 필요한 실패로 분류돼
+  // 사람을 부른다. 실제로 첫 구현이 그랬다.
+  if (routes.length === 0) {
+    throw new Error(`수집할 노선을 하나도 확인하지 못했습니다: ${routeNames.join(', ')}번`, {
+      cause: toSingleCause(failures, `노선 ${failures.length}개 확인 실패`),
+    });
+  }
   if (reused.length > 0) console.log(`정류장 캐시 재사용: ${reused.join(', ')}번`);
   return routes;
 }
@@ -328,9 +390,14 @@ async function collectOnce(routes: Route[], apiKey: string, hashSecret: string):
   // 알림이 부분 실패를 영영 못 보고, 던지기 전에 저장하지 않으면 성공한 호출이 버려진다.
   const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
   if (failures.length > 0) {
-    const reason = failures[0]!.reason;
-    const message = reason instanceof Error ? reason.message : String(reason);
-    throw new Error(`노선 ${failures.length}/${routes.length}개 수집 실패 (성공분 ${snapshots.length}개는 저장): ${message}`);
+    // 실패를 전부 매단다. 첫 실패만 올리면 노선 순서 하나로 성격이 갈린다. 3330이 연결
+    // 타임아웃, 1650이 키 폐기로 갈린 사이클에서 앞의 것만 보면 저절로 낫는 실패가 되고,
+    // 키가 죽은 사실이 종료 코드에서 사라진다.
+    const cause = toSingleCause(failures.map((failure) => failure.reason), `노선 ${failures.length}개 수집 실패`);
+    throw new Error(
+      `노선 ${failures.length}/${routes.length}개 수집 실패 (성공분 ${snapshots.length}개는 저장): ${describeFailure(cause)}`,
+      { cause },
+    );
   }
 }
 
@@ -364,14 +431,17 @@ async function main(): Promise<void> {
     try {
       await collectOnce(routes, apiKey, hashSecret);
     } catch (error: unknown) {
-      console.error(`수집 실패: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`수집 실패: ${describeFailure(error)}`);
     }
     if (Date.now() + intervalSeconds * 1_000 >= endsAt) break;
     await new Promise<void>((resolve) => setTimeout(resolve, intervalSeconds * 1_000));
   } while (Date.now() < endsAt);
 }
 
+// 종료 코드로 실패의 성격을 알린다. 워크플로는 이 값으로 경고와 실패를 가른다.
+// 저절로 낫는 실패까지 사람을 부르면 정작 키가 죽은 날의 알림이 묻힌다.
 main().catch((error: unknown) => {
-  console.error(`수집기를 시작하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
+  const kind = classifyFailure(error);
+  console.error(`수집기를 시작하지 못했습니다 [${kind}]: ${describeFailure(error)}`);
+  process.exitCode = kind === 'transient' ? transientExitCode : 1;
 });

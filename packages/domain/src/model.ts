@@ -213,6 +213,44 @@ function readVehicleSnapshot(value: unknown): VehicleSnapshot | null {
   };
 }
 
+export interface UpstreamErrorEnvelope {
+  /** 공공데이터포털 공통 오류 코드. 20, 30, 31은 키와 권한, 22는 일일 한도, 01, 05, 23은 일시적. */
+  code: string;
+  message: string;
+}
+
+/**
+ * 공공데이터포털의 오류 봉투를 읽는다. 정상 응답에는 이 봉투가 없으므로 null이다.
+ *
+ * 상류는 키나 한도 문제를 HTTP 200 본문에 담아 보내기도 한다. 이걸 보지 않으면 항목 목록이 비어
+ * "차량 0대"가 정상 응답처럼 지나간다. 수집기에서는 빈 스냅샷이 관측으로 남고, `/api/live`에서는
+ * "운행 중인 차량이 없습니다"가 120초 캐시된다. 두 경로가 같은 규칙을 봐야 해서 여기 둔다.
+ *
+ * `returnAuthMsg`는 언어에 따라 달라진다(실측에서 "등록되지 않은 서비스키"가 왔다).
+ * 판정은 숫자인 `returnReasonCode`로 하고 문구는 사람이 읽을 메시지로만 쓴다.
+ */
+export function readUpstreamErrorEnvelope(payload: unknown): UpstreamErrorEnvelope | null {
+  if (!isRecord(payload)) return null;
+  const envelope = isRecord(payload.OpenAPI_ServiceResponse) ? payload.OpenAPI_ServiceResponse : null;
+  const header = envelope && isRecord(envelope.cmmMsgHeader) ? envelope.cmmMsgHeader : null;
+  if (!header) return null;
+
+  const reasonCode = readIdentifier(header.returnReasonCode);
+  const authMessage = readIdentifier(header.returnAuthMsg) ?? '';
+  const detail = readIdentifier(header.errMsg) ?? '';
+  // 03이 NODATA다. 운행 차량이 없다는 뜻이라 오류가 아니다. 부분 문자열로 넓게 잡으면
+  // 진짜 오류까지 삼키므로 코드와 NODATA 표기만 본다.
+  const noData = reasonCode === '03'
+    || authMessage.toUpperCase().includes('NODATA')
+    || detail.toUpperCase().includes('NODATA');
+  if (noData) return null;
+
+  return {
+    code: reasonCode ?? authMessage ?? 'UNKNOWN',
+    message: [authMessage, detail].filter(Boolean).join(' '),
+  };
+}
+
 export function readRouteCache(value: unknown): RouteCache | null {
   if (!isRecord(value)) return null;
   const cachedAt = readString(value.cachedAt);
