@@ -65,12 +65,7 @@ jobs:
           git push --quiet origin predictions
 
       - name: Assemble site
-        run: |
-          mkdir -p site/prototype-bus site/dist
-          cp prototype-bus/index.html prototype-bus/legal.html site/prototype-bus/
-          cp -R prototype-bus/data site/prototype-bus/data
-          cp -R dist/prototype-bus dist/shared site/dist/
-          printf '<!doctype html><meta http-equiv="refresh" content="0; url=prototype-bus/" />' > site/index.html
+        run: npm run assemble:site
 
       - uses: actions/configure-pages@v5
         with:
@@ -91,8 +86,8 @@ jobs:
         run: |
           if [ -z "$DEPLOY_HOOK_URL" ]; then
             # 건너뛰어도 잡은 초록으로 끝나므로, 갱신이 멈춘 걸 아무도 모른 채 며칠이 간다.
-            # 2026-07-29에 배포본 데이터가 13.6시간 낡은 채로 있었다 (DEPLOY.md §4).
-            echo "::warning::VERCEL_DEPLOY_HOOK_URL 미설정. 배포본 데이터가 갱신되지 않습니다 (DEPLOY.md §4)"
+            # 2026-07-29에 배포본 데이터가 13.6시간 낡은 채로 있었다.
+            echo "::warning::VERCEL_DEPLOY_HOOK_URL 미설정. docs/operations/deployment.md에 따라 배포 데이터 갱신 경로를 확인하세요"
             exit 0
           fi
           curl -fsS -X POST "$DEPLOY_HOOK_URL" -o /dev/null

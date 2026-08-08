@@ -180,10 +180,10 @@ jobs:
             const dataDirectory = path.join(privateDataRoot, 'data');
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-            // 창 정의와 간격 규칙은 bus-seat-collector/schedule.ts 한 곳에 있다.
+            // 창 정의와 간격 규칙은 tools/collector/src/schedule.ts 한 곳에 있다.
             // 예산 계산기(npm run budget)와 테스트가 같은 모듈을 쓴다.
             const { activeWindow, scheduledIntervalSeconds, withinServiceHours } =
-              await import(`file://${path.join(workspace, 'dist/bus-seat-collector/schedule.js')}`);
+              await import(`file://${path.join(workspace, 'dist/tools/collector/src/schedule.js')}`);
 
 
             let loopStartMs = Date.now();
@@ -277,7 +277,7 @@ jobs:
 
             do {
               try {
-                execFileSync('node', ['dist/bus-seat-collector/collector.js', '--once'], {
+                execFileSync('node', ['dist/tools/collector/src/collector.js', '--once'], {
                   cwd: workspace,
                   stdio: 'inherit',
                   env: process.env,
@@ -294,7 +294,7 @@ jobs:
                   await uploadChangedFiles();
                 } catch (uploadError) {
                   if (uploadError.status === 401 || uploadError.status === 403) {
-                    abortReason = `데이터 저장소 인증 실패(${uploadError.status}). BUS_DATA_REPO_TOKEN을 갱신한다 — DEPLOY.md §3: ${uploadError.message}`;
+                    abortReason = `데이터 저장소 인증 실패(${uploadError.status}). BUS_DATA_REPO_TOKEN을 갱신한다 — docs/operations/deployment.md: ${uploadError.message}`;
                   } else {
                     core.warning(`실패 사이클의 성공분 업로드 실패: ${uploadError.message}`);
                   }
@@ -302,7 +302,7 @@ jobs:
                 consecutiveFailures += 1;
                 // octokit HttpError의 status. execFileSync도 status(종료 코드)를 달지만 0~255라 겹치지 않는다.
                 if (error.status === 401 || error.status === 403) {
-                  abortReason = `데이터 저장소 인증 실패(${error.status}). BUS_DATA_REPO_TOKEN을 갱신한다 — DEPLOY.md §3: ${error.message}`;
+                  abortReason = `데이터 저장소 인증 실패(${error.status}). BUS_DATA_REPO_TOKEN을 갱신한다 — docs/operations/deployment.md: ${error.message}`;
                 } else if (consecutiveFailures >= maxConsecutiveFailures) {
                   abortReason = `수집 사이클 연속 ${consecutiveFailures}회 실패로 중단한다. 호출만 나가고 데이터가 남지 않는다: ${error.message}`;
                 } else {
