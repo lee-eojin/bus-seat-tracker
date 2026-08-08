@@ -54,7 +54,7 @@ export function computeRetention(events, cohortDate) {
   }));
   const returnedEver = cohort.filter((visitorId) => [...visitDates.get(visitorId)].some((date) => date > cohortDate)).length;
   // 기획서 7.3의 "1주 재방문"은 코호트일 이후 7일 안의 누적 재방문자다. 특정 날짜 하루
-  // (returnedByDate)도, 기간 상한 없는 returnedEver도 아니다 — 셋을 헷갈리면 같은
+  // (returnedByDate)도, 기간 상한 없는 returnedEver도 아니다. 셋을 헷갈리면 같은
   // 데이터에서 통과와 불통과가 갈린다.
   const weekEnd = addDays(cohortDate, 7);
   const returnedWithinWeek = cohort.filter((visitorId) =>
@@ -123,18 +123,18 @@ async function main() {
   const markersAt = (date) => markerList.filter((marker) => marker.date === date).map((marker) => marker.label);
 
   console.log('═'.repeat(56));
-  console.log(`재방문 집계 · 코호트 ${cohortDate} (첫 방문 기준)`);
+  console.log(`재방문 집계: 코호트 ${cohortDate} (첫 방문 기준)`);
   console.log('═'.repeat(56));
   console.log(`코호트 크기: ${result.cohortSize}명`);
-  console.log(`1주 이내(≤${addDays(cohortDate, 7)}) 재방문: ${result.returnedWithinWeek}명 · 기간 무제한 재방문: ${result.returnedEver}명`);
+  console.log(`1주 이내(≤${addDays(cohortDate, 7)}) 재방문: ${result.returnedWithinWeek}명, 기간 무제한 재방문: ${result.returnedEver}명`);
   console.log('\n  날짜          재방문   비율');
   for (const { date, returned } of result.returnedByDate) {
     const share = result.cohortSize > 0 ? ` ${((returned / result.cohortSize) * 100).toFixed(0).padStart(4)}%` : '';
     const labels = markersAt(date);
-    console.log(`  ${date}  ${String(returned).padStart(6)}${share}${labels.length > 0 ? `   ← ${labels.join(' · ')}` : ''}`);
+    console.log(`  ${date}  ${String(returned).padStart(6)}${share}${labels.length > 0 ? `   ← ${labels.join(', ')}` : ''}`);
   }
   if (cohortDate === '2026-07-29') {
-    console.log('\n기획서 7.3 기준: 1주 이내 재방문 15명 이상이면 통과 — 위의 "1주 이내" 값으로 판정한다.');
+    console.log('\n기획서 7.3 기준: 1주 이내 재방문 15명 이상이면 통과. 위의 "1주 이내" 값으로 판정한다.');
     console.log('분모 주의: 기획서의 51명(화면을 연 사람)과 이 코호트(방문 기록이 남은 방문자)는 집계');
     console.log('경로가 달라 크기가 다를 수 있다. 판정은 비율이 아니라 절대 인원(15명)으로 한다.');
   }

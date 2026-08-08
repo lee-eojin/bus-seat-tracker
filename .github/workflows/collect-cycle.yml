@@ -386,7 +386,7 @@ jobs:
             // 되돌리면 실행이 초록으로 끝나고 재시도까지 도는데, 토큰이 죽은 날 그러면 아무도 모른다.
             const noteAbort = (kind, reason) => {
               if (abortKind === 'actionable') {
-                abortReason = `${abortReason} · ${reason}`;
+                abortReason = `${abortReason} / ${reason}`;
                 return;
               }
               abortReason = reason;
@@ -432,7 +432,7 @@ jobs:
                   await uploadChangedFiles();
                 } catch (uploadError) {
                   if (uploadError.status === 401 || uploadError.status === 403) {
-                    const reason = `데이터 저장소 인증 실패(${uploadError.status}). BUS_DATA_REPO_TOKEN을 갱신한다 — docs/operations/deployment.md: ${uploadError.message}`;
+                    const reason = `데이터 저장소 인증 실패(${uploadError.status}). BUS_DATA_REPO_TOKEN을 갱신한다 (docs/operations/deployment.md): ${uploadError.message}`;
                     // 즉시 남긴다. 뒤 분기가 사유를 이어 붙이더라도 이 문구는 로그에 남아야 한다.
                     core.warning(reason);
                     noteAbort('actionable', reason);
@@ -449,7 +449,7 @@ jobs:
                 const detail = error.message;
                 lastFailureDetail = detail;
                 if (error.status === 401 || error.status === 403) {
-                  noteAbort('actionable', `데이터 저장소 인증 실패(${error.status}). BUS_DATA_REPO_TOKEN을 갱신한다 — docs/operations/deployment.md: ${error.message}`);
+                  noteAbort('actionable', `데이터 저장소 인증 실패(${error.status}). BUS_DATA_REPO_TOKEN을 갱신한다 (docs/operations/deployment.md): ${error.message}`);
                 } else if (consecutiveFailures >= maxConsecutiveFailures) {
                   noteAbort(lastFailureKind, `수집 사이클 연속 ${consecutiveFailures}회 실패로 중단한다. 호출만 나가고 데이터가 남지 않는다: ${detail}`);
                 } else {

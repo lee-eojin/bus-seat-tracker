@@ -2,7 +2,7 @@ export type Direction = 'up' | 'down';
 
 export type SeatState = 'ok' | 'warn' | 'bad' | 'unknown';
 
-// 승차할 수 없는 정류장. GBIS는 고속도로 진출입로·톨게이트처럼 노선이 지나가기만 하는
+// 승차할 수 없는 정류장. GBIS는 고속도로 진출입로나 톨게이트처럼 노선이 지나가기만 하는
 // 지점을 정류장 목록에 함께 내려주고, 이름 끝의 표기로만 구분한다.
 //
 // 표기가 바뀐 적이 있다. 2026-07 중 `(경유)` → `(미정차)`로 관측됐고, 한쪽만 보던 코드가
@@ -79,7 +79,7 @@ export interface LatestRoute {
   stops: DisplayStop[];
   vehicles: DisplayVehicle[];
   // 정류장 시퀀스 → 마지막 큐 해소 이후 만석으로 떠난 버스 수 (boarding.ts).
-  // 조밀 관측이 없는 정류장은 도착·출발을 가릴 수 없어 항목 자체가 없다 — 0과 다르다.
+  // 조밀 관측이 없는 정류장은 도착과 출발을 가릴 수 없어 항목 자체가 없다. 0과 다르다.
   fullDepartureStreaks: Record<string, number>;
 }
 

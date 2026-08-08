@@ -24,8 +24,8 @@ import { loadRouteCaches, loadSnapshots } from './data-source.js';
 // 사이에서는 줄에 들어온 사람과 버스로 나간 사람이 같으므로, 관측 불가능한 도착량을
 // 관측 가능한 승차량으로 대신 셀 수 있다.
 //
-//   λ = Σ승차(t₀, t₁] / (t₁ − t₀)          t₀·t₁은 둘 다 큐 해소 시점이어야 한다
-//   대기(t) = λ · (t − t₀) − Σ승차(t₀, t]
+//   λ = Σ승차(t₀, t₁] / (t₁ − t₀)          t₀와 t₁은 둘 다 큐 해소 시점이어야 한다
+//   대기(t) = λ × (t − t₀) − Σ승차(t₀, t]
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(currentDirectory, '..', '..', '..', '..');
@@ -160,9 +160,9 @@ function passesForDay(
     const inWindow = run.filter((point) => seoulHour(point.time) >= options.fromHour && seoulHour(point.time) < options.toHour);
     const atStop = inWindow.filter((point) => point.sequence === options.stopSequence);
 
-    // 조밀 관측이 있으면 같은 정류장에서 도착·출발을 직접 읽는다. 경유지 트릭은 10분
+    // 조밀 관측이 있으면 같은 정류장에서 도착과 출발을 직접 읽는다. 경유지 트릭은 10분
     // 샘플링의 우회책이었고 1분 간격에서는 필요 없다. 정차 중 갱신이 섞이는 문제도
-    // 여기서는 사라진다 — 첫 관측이 도착, 마지막 관측이 출발이다.
+    // 여기서는 사라진다. 첫 관측이 도착, 마지막 관측이 출발이다.
     if (atStop.length >= 2) {
       const first = atStop[0]!;
       const last = atStop[atStop.length - 1]!;
@@ -267,14 +267,14 @@ async function main(): Promise<void> {
   const stopName = cache.stops.find((stop) => stop.sequence === options.stopSequence)?.name ?? '(이름 없음)';
 
   console.log('═'.repeat(78));
-  console.log(`대기 인원 복원 · ${options.routeName} seq${options.stopSequence} ${stopName}`);
+  console.log(`대기 인원 복원: ${options.routeName} seq${options.stopSequence} ${stopName}`);
   console.log('═'.repeat(78));
   if (passThrough.length === 0) {
-    console.log('하류 미정차 지점 없음 — 조밀 관측(같은 정류장 2회 이상)으로만 도착·출발을 읽는다.');
+    console.log('하류 미정차 지점 없음. 조밀 관측(같은 정류장 2회 이상)으로만 도착과 출발을 읽는다.');
   } else {
     console.log(`하류 미정차 지점: ${passThrough.join(', ')} (조밀 관측이 없을 때만 사용)`);
   }
-  console.log(`관측 창 ${options.fromHour}~${options.toHour}시 · 상류 대체 허용 seq${options.upstreamFrom} 이상 · 상류 오염 보정 ${options.correct ? '켬' : '끔'}`);
+  console.log(`관측 창 ${options.fromHour}~${options.toHour}시, 상류 대체 허용 seq${options.upstreamFrom} 이상, 상류 오염 보정 ${options.correct ? '켬' : '끔'}`);
 
   const snapshots = await loadSnapshots(options.dataDirectory, options.routeName);
   const dates = [...new Set(snapshots.map((snapshot) => toSeoulBucket(snapshot.collectedAt).date))].sort()
@@ -301,7 +301,7 @@ async function main(): Promise<void> {
     // 넘는 날만 날짜 표본으로 인정한다.
     const dayMinimumMinutes = 15;
     console.log('\n' + '═'.repeat(104));
-    console.log(`정류장×날짜 λ — 날짜 간 분산 (하루 구간 합계 ${dayMinimumMinutes}분 이상인 날만 · 변동계수는 표본 기준 n−1)`);
+    console.log(`정류장×날짜 λ: 날짜 간 분산 (하루 구간 합계 ${dayMinimumMinutes}분 이상인 날만, 변동계수는 표본 기준 n−1)`);
     console.log('═'.repeat(104));
     console.log('주의: 이 모드는 §8 상류 오염 보정을 적용하지 않는다. 상류 대체가 섞인 정류장의 λ에는');
     console.log('상류 정류장 승차가 귀속되므로, 직독/상류대체 열로 오염도를 가려 읽어야 한다.');
@@ -370,10 +370,10 @@ async function main(): Promise<void> {
     for (const row of stopRows.sort((left, right) => right.mean - left.mean)) {
       const perDay = row.days.map((day) => `${day.date.slice(5)}:${day.lambda.toFixed(2)}`).join(' ');
       console.log(
-        `  ${String(row.sequence).padStart(3)}  ${row.name.slice(0, 24).padEnd(26)}${String(row.days.length).padStart(4)}  ${perDay.padEnd(36)}${row.mean.toFixed(2).padStart(6)}${row.sampleSd.toFixed(2).padStart(10)}${(row.sampleCv === null ? '—' : row.sampleCv.toFixed(2)).padStart(10)}${row.pooledLambda.toFixed(2).padStart(8)}  ${row.direct}/${row.viaPassThrough}`,
+        `  ${String(row.sequence).padStart(3)}  ${row.name.slice(0, 24).padEnd(26)}${String(row.days.length).padStart(4)}  ${perDay.padEnd(36)}${row.mean.toFixed(2).padStart(6)}${row.sampleSd.toFixed(2).padStart(10)}${(row.sampleCv === null ? '-' : row.sampleCv.toFixed(2)).padStart(10)}${row.pooledLambda.toFixed(2).padStart(8)}  ${row.direct}/${row.viaPassThrough}`,
       );
     }
-    console.log(`\n  날짜 2일 이상 잡힌 정류장 ${stopRows.length}곳 · 대상 날짜 ${dates.join(', ')}`);
+    console.log(`\n  날짜 2일 이상 잡힌 정류장 ${stopRows.length}곳, 대상 날짜 ${dates.join(', ')}`);
     if (options.jsonPath) {
       await writeFile(options.jsonPath, `${JSON.stringify({ generatedAt: new Date().toISOString(), route: options.routeName, dates, window: { fromHour: options.fromHour, toHour: options.toHour }, dayMinimumMinutes, stops: stopRows }, null, 2)}\n`);
       console.log(`\n결과 저장: ${options.jsonPath}`);
@@ -416,7 +416,7 @@ async function main(): Promise<void> {
         `  ${String(row.sequence).padStart(3)}  ${row.name.slice(0, 26).padEnd(28)}${String(row.intervals).padStart(4)}${row.boarding.toFixed(0).padStart(8)}${row.minutes.toFixed(0).padStart(7)}${row.lambda.toFixed(2).padStart(12)}   ${row.direct}/${row.via}/${row.skipped}`,
       );
     }
-    console.log(`\n  정류장 ${rows.length}곳에서 λ 산출 · 전체 ${cache.stops.length}곳`);
+    console.log(`\n  정류장 ${rows.length}곳에서 λ 산출, 전체 ${cache.stops.length}곳`);
     if (options.jsonPath) {
       await writeFile(options.jsonPath, `${JSON.stringify({ generatedAt: new Date().toISOString(), route: options.routeName, dates, window: { fromHour: options.fromHour, toHour: options.toHour }, stops: rows }, null, 2)}\n`);
       console.log(`\n결과 저장: ${options.jsonPath}`);
@@ -440,8 +440,8 @@ async function main(): Promise<void> {
 
     const clears = passes.filter((item) => item.cleared).length;
     console.log(
-      `\n[${date}] 통과 ${passes.length}대 (조밀 직독 ${day.direct} · 경유지 ${day.viaPassThrough} · 판정불가 ${day.skipped}) ` +
-      `· 큐해소 ${clears}건 · 산출 구간 ${intervals.length}개`,
+      `\n[${date}] 통과 ${passes.length}대 (조밀 직독 ${day.direct}, 경유지 ${day.viaPassThrough}, 판정불가 ${day.skipped}), ` +
+      `큐해소 ${clears}건, 산출 구간 ${intervals.length}개`,
     );
     for (const interval of intervals) {
       console.log(
@@ -463,7 +463,7 @@ async function main(): Promise<void> {
   for (const pass of allPasses) {
     const statement = queueStatement(pass);
     const mark = statement.exact ? '=' : '≥';
-    const note = statement.exact ? '정확 (좌석 남기고 출발)' : '하한 (만차 출발 — 못 탄 사람은 흔적 없음)';
+    const note = statement.exact ? '정확 (좌석 남기고 출발)' : '하한 (만차 출발, 못 탄 사람은 흔적 없음)';
     console.log(
       `  ${pass.date.slice(5)} ${seoulClock(pass.at)}  ${pass.arrivalSeats.toFixed(0).padStart(4)}석 → ${String(pass.departureSeats).padStart(3)}석   ` +
       `${mark} ${statement.people.toFixed(0).padStart(3)}명  ${note}`,
@@ -479,7 +479,7 @@ async function main(): Promise<void> {
     ]);
 
     console.log('\n' + '═'.repeat(78));
-    console.log(`탑승 가능성 판정 · 여유폭 ${verdictSeatMargin}석 (docs/model/boarding-verdict.md)`);
+    console.log(`탑승 가능성 판정: 여유폭 ${verdictSeatMargin}석 (docs/model/boarding-verdict.md)`);
     console.log('═'.repeat(78));
     console.log('  날짜   시각    좌석   기대수요  만석연속   판정     실제');
     for (const date of dates) {
@@ -512,11 +512,11 @@ async function main(): Promise<void> {
   if (overall) {
     const totalBoarding = allIntervals.reduce((sum, interval) => sum + interval.boarding, 0);
     const totalMinutes = allIntervals.reduce((sum, interval) => sum + interval.minutes, 0);
-    console.log(`  전체 구간 ${overall.count}개 · 평균 ${overall.mean.toFixed(2)} · 중앙값 ${overall.median.toFixed(2)} · 표준편차 ${overall.sd.toFixed(2)} · 범위 ${overall.min.toFixed(2)}~${overall.max.toFixed(2)}`);
+    console.log(`  전체 구간 ${overall.count}개, 평균 ${overall.mean.toFixed(2)}, 중앙값 ${overall.median.toFixed(2)}, 표준편차 ${overall.sd.toFixed(2)}, 범위 ${overall.min.toFixed(2)}~${overall.max.toFixed(2)}`);
     console.log(`  시간가중 평균 λ ${(totalBoarding / totalMinutes).toFixed(2)}명/분 (승차 ${totalBoarding.toFixed(0)}명 / ${totalMinutes.toFixed(0)}분)`);
   }
   if (longStats) {
-    console.log(`\n  40분 이상 구간 ${longStats.count}개 · 평균 ${longStats.mean.toFixed(2)} · 표준편차 ${longStats.sd.toFixed(2)} · 변동계수 ${longStats.cv?.toFixed(2) ?? '—'} · 범위 ${longStats.min.toFixed(2)}~${longStats.max.toFixed(2)}`);
+    console.log(`\n  40분 이상 구간 ${longStats.count}개, 평균 ${longStats.mean.toFixed(2)}, 표준편차 ${longStats.sd.toFixed(2)}, 변동계수 ${longStats.cv?.toFixed(2) ?? '-'}, 범위 ${longStats.min.toFixed(2)}~${longStats.max.toFixed(2)}`);
     for (const interval of [...longRuns].sort((left, right) => right.minutes - left.minutes)) {
       console.log(`    ${interval.date} ${seoulClock(interval.from)}~${seoulClock(interval.to)}  ${String(Math.round(interval.minutes)).padStart(3)}분  λ ${interval.lambda.toFixed(2)}  (상류대체 ${interval.contaminated}/${interval.buses}대)`);
     }
@@ -535,12 +535,12 @@ async function main(): Promise<void> {
   for (const bucket of [...byBucket.keys()].sort((left, right) => left - right)) {
     const stats = describe(byBucket.get(bucket)!)!;
     const label = `${String(Math.floor(bucket / 2)).padStart(2, '0')}:${bucket % 2 ? '30' : '00'}`;
-    const spread = stats.count > 1 ? `${stats.min.toFixed(2)}~${stats.max.toFixed(2)}` : '—';
+    const spread = stats.count > 1 ? `${stats.min.toFixed(2)}~${stats.max.toFixed(2)}` : '-';
     console.log(`  ${label}  n=${stats.count}  평균 ${stats.mean.toFixed(2).padStart(5)}  범위 ${spread}`);
   }
 
   console.log('\n' + '═'.repeat(78));
-  console.log('확장 진단 — 출발 잔여석을 깨끗하게 읽을 수 있는 정류장');
+  console.log('확장 진단: 출발 잔여석을 깨끗하게 읽을 수 있는 정류장');
   console.log('═'.repeat(78));
   const clean = cache.stops
     .filter((stop) => !isNonBoardingStop(stop.name) && passThroughAfter(cache, stop.sequence).length > 0)
@@ -559,7 +559,7 @@ async function main(): Promise<void> {
       overall,
       longRuns: longStats,
       intervals: allIntervals,
-      // 문서의 통과 이력 표와 보정 검증(§5·§8)이 이 배열에서 그대로 나온다.
+      // 문서의 통과 이력 표와 보정 검증(§5, §8)이 이 배열에서 그대로 나온다.
       passes: allPasses.map((item) => ({ ...item, clock: seoulClock(item.at) })),
     }, null, 2)}\n`);
     console.log(`\n결과 저장: ${options.jsonPath}`);

@@ -90,7 +90,7 @@ describe('실패 분류', () => {
     assert.equal(classifyFailure(failure), 'actionable');
   });
 
-  it('401·403은 사람이 손대야 한다', () => {
+  it('401과 403은 사람이 손대야 한다', () => {
     assert.equal(classifyFailure(new UpstreamFailure('오류', { httpStatus: 403 })), 'actionable');
   });
 

@@ -126,7 +126,7 @@ export const offWindowSnapshotGapSeconds = 3600;
 /**
  * 이 시각에 최신 스냅샷이 정상적으로 얼마나 낡아 있을 수 있는지(초).
  * 창 안은 그 구간의 수집 간격, 창 밖 운행 시간대는 매시 1회 간격이다.
- * 운행 시간 밖은 수집 자체가 없으므로 null — 신선도를 따질 수 없다.
+ * 운행 시간 밖은 수집 자체가 없으므로 null이다. 신선도를 따질 수 없다.
  */
 export function expectedSnapshotGapSeconds(atMs: number): number | null {
   if (!withinServiceHours(atMs)) return null;

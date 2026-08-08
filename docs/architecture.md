@@ -5,7 +5,7 @@
 ## 전체 흐름
 
 ```text
-수집·발행
+수집과 발행
 
 GBIS API
    │
@@ -50,10 +50,10 @@ tools/collector ──> 비공개 데이터 저장소 ──> apps/web/scripts/b
 
 | 파일 | 내용 | 화면에서 읽는 시점 |
 |---|---|---|
-| `latest.js` | 노선·정류장과 마지막 차량 스냅샷, 생성 시점 기준 최근 90분 만석 연속 수 | 첫 화면 전에 동기 로드 |
-| `history.js` | 정류장·30분 구간별 관측 수와 만석 횟수 | 첫 화면 뒤 지연 로드 |
-| `profile.js` | 정류장·30분 구간별 순수요 프로파일 | 첫 화면 뒤 지연 로드 |
-| `daily.js` | 날짜·정류장·시간대별 좌석 집계 | 산출은 하지만 현재 앱은 직접 읽지 않음 |
+| `latest.js` | 노선과 정류장, 마지막 차량 스냅샷, 생성 시점 기준 최근 90분 만석 연속 수 | 첫 화면 전에 동기 로드 |
+| `history.js` | 정류장별, 30분 구간별 관측 수와 만석 횟수 | 첫 화면 뒤 지연 로드 |
+| `profile.js` | 정류장별, 30분 구간별 순수요 프로파일 | 첫 화면 뒤 지연 로드 |
+| `daily.js` | 날짜별, 정류장별, 시간대별 좌석 집계 | 산출은 하지만 현재 앱은 직접 읽지 않음 |
 
 공개 파일에는 가명화한 차량 ID도 넣지 않는다. `latest.js`의 차량 ID는 항상 `null`이고, 라이브 응답에서도 차량 번호와 원본 ID를 제거한다.
 
@@ -81,9 +81,9 @@ Vercel에서는 `npm run build:site`가 위 세 단계를 묶어 실행한다. `
 
 화면과 정적 예측 로그는 같은 `forecastVehicleStops`를 호출한다. 둘 다 `travel-time.ts`의 정류장당 2분 가정으로 시간 버킷을 고른다. rolling-origin 백테스트는 `profile.ts`와 `boarding.ts`의 하위 규칙을 공유하지만 실제 도착 관측의 30분 버킷 하나를 구간 전체에 사용한다. 과거 백테스트와 실제 발행 예측 채점을 따로 운영하는 이유다.
 
-공유 함수를 호출한다고 최종 출력까지 같은 것은 아니다. 발행 로그는 `generatedAt`을 기준으로 미정차 지점을 포함한 하류 1·3·6정류장의 좌석 값과 저신뢰 여부만 남긴다. 화면은 열어 본 시각을 기준으로 다시 계산하고 미정차 지점은 배지에서 제외하며, `latest.js`의 만석 연속 수를 더해 탑승 판정을 보여 준다. 따라서 발행 로그 채점은 좌석 예보 파이프라인을 검증하지만 화면의 최종 판정 전체를 검증하지는 않는다.
+공유 함수를 호출한다고 최종 출력까지 같은 것은 아니다. 발행 로그는 `generatedAt`을 기준으로 미정차 지점을 포함한 하류 1, 3, 6정류장의 좌석 값과 저신뢰 여부만 남긴다. 화면은 열어 본 시각을 기준으로 다시 계산하고 미정차 지점은 배지에서 제외하며, `latest.js`의 만석 연속 수를 더해 탑승 판정을 보여 준다. 따라서 발행 로그 채점은 좌석 예보 파이프라인을 검증하지만 화면의 최종 판정 전체를 검증하지는 않는다.
 
-승차 정류장 추천의 표본·만석률 임계값과 상류 후보 선택은 `recommendation.ts`에 있다. 대기열의 해소 시각 추론과 60분 제한은 `queue.ts`가 맡는다. `app.ts`에는 선택값, 현재 시각, 세션 동안 추적한 해소 시각을 도메인 함수에 넘기고 결과를 화면 문구로 바꾸는 역할만 남긴다.
+승차 정류장 추천의 표본과 만석률 임계값, 상류 후보 선택은 `recommendation.ts`에 있다. 대기열의 해소 시각 추론과 60분 제한은 `queue.ts`가 맡는다. `app.ts`에는 선택값, 현재 시각, 세션 동안 추적한 해소 시각을 도메인 함수에 넘기고 결과를 화면 문구로 바꾸는 역할만 남긴다.
 
 목적지, 승차 정류장, 현장 기록, 무작위 방문자 ID는 브라우저의 `localStorage`에 저장한다. 현재 위치는 네이버지도 링크를 만들 때만 사용하며 서비스 서버로 보내지 않는다.
 
@@ -105,9 +105,9 @@ Vercel에서는 `npm run build:site`가 위 세 단계를 묶어 실행한다. `
 | `packages/domain/` | 공용 자료형, 입력 검증, 프로파일, 좌석 예보, 탑승 판정, 정류장 추천, 대기 인원 계산 | 파일 I/O, 환경변수, HTTP 핸들러, DOM |
 | `tools/collector/` | GBIS 배치 수집, 수집 시간표, 호출 예산 | 공개 사이트 생성, 연구 보고서 |
 | `research/` | 백테스트, 라이브 예측 채점, 대기 인원 복원, 재방문 분석 | 서비스 런타임 진입점 |
-| `.github/workflows/` | 수집·발행·검증 작업의 실행 순서와 외부 저장소 연동 | 모델 공식의 별도 구현 |
+| `.github/workflows/` | 수집, 발행, 검증 작업의 실행 순서와 외부 저장소 연동 | 모델 공식의 별도 구현 |
 | `docs/` | 현재 설계, 연구 근거, 운영 절차, 보관 기록 | 빌드 산출물과 원본 데이터 |
-| `design/` | 화면·브랜드 시안과 카드 생성 도구 | 서비스 런타임 코드 |
+| `design/` | 화면과 브랜드 시안, 카드 생성 도구 | 서비스 런타임 코드 |
 
 `data/`, `dist/`, `apps/web/public/data/`, `site/`는 다시 만들 수 있는 로컬 산출물이거나 비공개 데이터이므로 저장소에 포함하지 않는다.
 
@@ -150,14 +150,14 @@ export { default } from '../apps/api/src/handlers/live.js';
 GBIS 원본 차량 식별자
   └─ HMAC 가명화
        └─ 비공개 JSONL
-            ├─ 프로파일·백테스트 입력
+            ├─ 프로파일과 백테스트 입력
             └─ 공개 빌드 시 식별자 제거
 ```
 
 - `GYEONGGI_BUS_API_KEY`와 `VEHICLE_HASH_SECRET`은 수집 환경에만 둔다.
 - 원본 차량 번호와 차량 ID는 파일에 쓰기 전에 가명화한다.
 - 가명 ID가 남는 원본 스냅샷과 라이브 예측 로그는 비공개 저장소 밖으로 내보내지 않는다.
-- 공개 데이터에는 노선 식별자, 정류장 이름·순번·좌표, 마지막 스냅샷의 차량 위치·잔여석·혼잡도·상태, 시각 구간별 좌석 집계와 프로파일을 넣는다. 차량 식별자는 제거한다.
+- 공개 데이터에는 노선 식별자, 정류장 이름/순번/좌표, 마지막 스냅샷의 차량 위치/잔여석/혼잡도/상태, 시각 구간별 좌석 집계와 프로파일을 넣는다. 차량 식별자는 제거한다.
 
 ### 실시간 데이터
 
@@ -165,23 +165,23 @@ GBIS 원본 차량 식별자
 
 ### 피드백 데이터
 
-브라우저가 만든 무작위 `visitorId`와 사용자가 직접 입력한 설문만 `/api/feedback`으로 보낸다. 핸들러는 필드 길이를 제한하고 `DATABASE_URL`로 Neon에 저장한다. 방문·설문 저장 실패는 화면 렌더링이나 실시간 조회에 영향을 주지 않는다.
+브라우저가 만든 무작위 `visitorId`와 사용자가 직접 입력한 설문만 `/api/feedback`으로 보낸다. 핸들러는 필드 길이를 제한하고 `DATABASE_URL`로 Neon에 저장한다. 방문과 설문 저장 실패는 화면 렌더링이나 실시간 조회에 영향을 주지 않는다.
 
 ## 변경할 때 확인할 곳
 
-| 바꾸려는 것 | 함께 확인할 파일·명령 |
+| 바꾸려는 것 | 함께 확인할 파일과 명령 |
 |---|---|
 | 순수요 추정이나 좌석 전파 | `packages/domain/src/profile.ts`, `forecast.ts`, `travel-time.ts`, `apps/web/scripts/build-data.ts`, `research/backtest/src/backtest.ts`; `npm test`와 `npm run backtest`로 배포 조합과 기준선 비교 |
-| 여유·빠듯·어려움 판정 | `packages/domain/src/boarding.ts`, 화면 문구, 대기 복원 검증; `npm test`와 필요하면 `npm run queue -- --verdict` |
+| 여유/빠듯/어려움 판정 | `packages/domain/src/boarding.ts`, 화면 문구, 대기 복원 검증; `npm test`와 필요하면 `npm run queue -- --verdict` |
 | 승차 정류장 추천 | `packages/domain/src/recommendation.ts`, `apps/web/src/app.ts`의 문구와 선택 상태; `npm test` |
 | 대기 인원이나 해소 시각 | `packages/domain/src/queue.ts`, `travel-time.ts`, `apps/web/src/app.ts`의 세션 상태; `npm test`와 필요하면 `npm run queue` |
-| 공개 데이터 형식 | `packages/domain/src/model.ts`의 자료형·리더, `build-data.ts`, `apps/web/src/app.ts`; 새 데이터로 `npm run build:site` |
+| 공개 데이터 형식 | `packages/domain/src/model.ts`의 자료형과 리더, `build-data.ts`, `apps/web/src/app.ts`; 새 데이터로 `npm run build:site` |
 | 수집 시간대나 간격 | `tools/collector/src/schedule.ts`, `.github/workflows/collect-bus-seats.yml`, `apps/web/src/app.ts`의 신선도 구간; `npm test`, `npm run budget` |
 | 실시간 캐시 시간 | `apps/api/src/handlers/live.ts`, `tools/collector/scripts/call-budget.mjs`, 운영 문서; `npm run budget` |
-| 지원 노선 | `apps/api/src/gbis-client.ts`의 `allowedRoutes`, 수집기의 `ROUTE_NAMES`, 예산 계산기의 `routeCount`, 화면용 데이터; 허용·거부 API 테스트 |
+| 지원 노선 | `apps/api/src/gbis-client.ts`의 `allowedRoutes`, 수집기의 `ROUTE_NAMES`, 예산 계산기의 `routeCount`, 화면용 데이터; 허용/거부 API 테스트 |
 | API 경로나 핸들러 | `apps/api/src/handlers/`, 루트 `api/` 어댑터, `vercel.json`, 브라우저 호출 경로; `npm test` |
 | 디렉터리 이동 | `tsconfig.json`, `package.json` 스크립트, `assemble-site.mjs`, `build-site.mjs`, 워크플로, HTML의 모듈 경로, Vercel 어댑터 |
-| 공개 범위나 식별자 | 수집기의 가명화, `buildLatestRoute`, `readLiveVehicles`, `gbis-client.ts`, `legal.html`; 생성된 `site/`에 키·차량 ID가 없는지 확인 |
+| 공개 범위나 식별자 | 수집기의 가명화, `buildLatestRoute`, `readLiveVehicles`, `gbis-client.ts`, `legal.html`; 생성된 `site/`에 키와 차량 ID가 없는지 확인 |
 | 배포 방식 | `vercel.json`, `apps/web/scripts/build-site.mjs`, `assemble-site.mjs`, `.github/workflows/publish-pages.yml`; 두 배포가 같은 `site/` 구성을 쓰는지 확인 |
 
 구조를 바꾼 뒤 최소 확인 순서는 다음과 같다.

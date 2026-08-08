@@ -35,8 +35,8 @@ export default async function handler(request: RequestLike, response: ResponseLi
   }
 
   // 캐시 키가 요청 URL 단위라, 같은 함수에 닿는 URL 변형 하나하나가 별개 캐시 엔트리로
-  // origin 호출을 만든다. 실측으로 확인된 변형은 중복 키(route=3330&route=X — 값마다
-  // 새 캐시 키)와 경로 변형(/api/live/, /api/live.ts — 각각 독립 캐시 키)이다. 퍼센트
+  // origin 호출을 만든다. 실측으로 확인된 변형은 중복 키(route=3330&route=X는 값마다
+  // 새 캐시 키)와 경로 변형(/api/live/와 /api/live.ts는 각각 독립 캐시 키)이다. 퍼센트
   // 인코딩은 플랫폼이 캐시 키와 함께 정규화해 핸들러에 오기 전에 접힌다.
   // 그래서 경로와 쿼리를 원문 문자열 정확 일치로만 통과시킨다.
   const requestUrl = request.url ?? '';
@@ -70,7 +70,7 @@ export default async function handler(request: RequestLike, response: ResponseLi
   } catch (error: unknown) {
     const status = error instanceof GbisError ? error.status : 502;
     const message = error instanceof GbisError ? error.message : '실시간 조회에 실패했습니다.';
-    // 실패는 캐시하지 않는다 — 일시 장애가 TTL 내내 굳으면 복구가 늦어진다.
+    // 실패는 캐시하지 않는다. 일시 장애가 TTL 내내 굳으면 복구가 늦어진다.
     response.setHeader('Cache-Control', 'no-store');
     response.status(status).json({ error: message });
   }

@@ -2,7 +2,7 @@ import { asList, isRecord, readGbisResultError, readIdentifier, readNumber, read
 
 // GBIS 클라이언트 (서버 전용).
 //
-// 키는 `process.env`에서만 읽는다 — 클라이언트가 직접 GBIS를 부르던 경로를 대체하는 것이
+// 키는 `process.env`에서만 읽는다. 클라이언트가 직접 GBIS를 부르던 경로를 대체하는 것이
 // 이 파일의 존재 이유다. 응답에서 차량번호(`plateNo`)와 원본 차량 ID(`vehId`)를 모두 제거해
 // 외부 API 응답에서 화면에 필요한 필드만 통과시켜 데이터 경계를 지킨다.
 
@@ -87,7 +87,7 @@ export async function fetchLiveSnapshot(routeName: string, apiKey: string): Prom
   try {
     response = await fetch(requestUrl, { signal: AbortSignal.timeout(requestTimeoutMs) });
   } catch (error: unknown) {
-    // 타임아웃·네트워크 오류를 502로 정규화한다. GBIS 원문을 그대로 흘리면 키가 섞일 수 있다.
+    // 타임아웃과 네트워크 오류를 502로 정규화한다. GBIS 원문을 그대로 흘리면 키가 섞일 수 있다.
     throw new GbisError(`GBIS 응답을 받지 못했습니다: ${failureCodes(error)}`, 502);
   }
 
@@ -98,7 +98,7 @@ export async function fetchLiveSnapshot(routeName: string, apiKey: string): Prom
   try {
     payload = JSON.parse(responseText) as unknown;
   } catch {
-    // 키 만료·한도 초과 시 GBIS가 XML 오류를 돌려준다. 본문을 그대로 노출하지 않는다.
+    // 키 만료나 한도 초과 시 GBIS가 XML 오류를 돌려준다. 본문을 그대로 노출하지 않는다.
     throw new GbisError('GBIS가 JSON을 반환하지 않았습니다. 키 또는 호출 한도를 확인하세요.', 502);
   }
 

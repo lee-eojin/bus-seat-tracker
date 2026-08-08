@@ -32,7 +32,7 @@ npm run collect -- --once
 # 3시간 동안 60초 간격으로 수집
 npm run collect -- --duration-hours=3 --interval-seconds=60
 
-# 노선·정류장 캐시를 바로 갱신한 뒤 한 번 수집
+# 노선과 정류장 캐시를 바로 갱신한 뒤 한 번 수집
 npm run collect -- --once --refresh-routes
 ```
 

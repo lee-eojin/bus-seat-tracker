@@ -256,8 +256,8 @@ function report(folds: FoldResult[]): void {
   const horizonOrder = ['1-2', '3-5', '6+'];
 
   console.log('═'.repeat(78));
-  console.log('v2 층-1 백테스트 · rolling-origin (프로파일은 test일 이전 날짜로만 학습)');
-  console.log(`좌석 정원 상수 ${capacity} · 예측구간 10~90% (목표 포함률 80%)`);
+  console.log('v2 층-1 백테스트: rolling-origin (프로파일은 test일 이전 날짜로만 학습)');
+  console.log(`좌석 정원 상수 ${capacity}, 예측구간 10~90% (목표 포함률 80%)`);
   console.log('═'.repeat(78));
 
   for (const fold of folds) {
@@ -266,9 +266,9 @@ function report(folds: FoldResult[]): void {
   }
 
   const fullCount = pooled.filter((instance) => instance.actualFull).length;
-  console.log(`\n[pooled] 총 관측쌍 ${pooled.length}건 · 실제 만석 ${fullCount}건 (${pooled.length ? (fullCount / pooled.length * 100).toFixed(1) : '0'}%)`);
+  console.log(`\n[pooled] 총 관측쌍 ${pooled.length}건, 실제 만석 ${fullCount}건 (${pooled.length ? (fullCount / pooled.length * 100).toFixed(1) : '0'}%)`);
 
-  // horizon별 MAE — 2×2: 귀속 규약(departure/arrival) × 배분(균등/역산). * = 행 최소
+  // horizon별 MAE. 2×2로 귀속 규약(departure/arrival) × 배분(균등/역산). * = 행 최소
   console.log('\n── 도착 좌석 MAE (horizon 정류장 수별, * = 최소) ─────────────');
   console.log('horizon      n      naive   uni(dep)   dec(dep)   uni(arr)   dec(arr)');
   for (const label of [...horizonOrder, 'all']) {
@@ -311,7 +311,7 @@ function report(folds: FoldResult[]): void {
   }
 
   console.log('\n' + '─'.repeat(78));
-  console.log('주의: 평일 rolling-origin·표본 소량. 수치는 방향성이며 결론이 아니다.');
+  console.log('주의: 평일 rolling-origin, 표본 소량. 수치는 방향성이며 결론이 아니다.');
   console.log('마지막 날은 진행 중인 부분 데이터일 수 있다. 운행 재구성이 옳다는 가정 하의 평가.');
   console.log('─'.repeat(78));
 }

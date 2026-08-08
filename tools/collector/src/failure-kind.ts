@@ -58,7 +58,7 @@ const transientErrorCodes = new Set([
 // AbortSignal.timeout이 끊었을 때의 이름. 요청이 예산을 넘긴 것이라 다음 사이클에 다시 해본다.
 const transientErrorNames = new Set(['TimeoutError', 'AbortError']);
 
-// 공공데이터포털이 키·권한·한도 문제에 붙이는 문구. 사람이 포털에서 조치해야 풀린다.
+// 공공데이터포털이 키, 권한, 한도 문제에 붙이는 문구. 사람이 포털에서 조치해야 풀린다.
 // 영문과 국문이 모두 관측된다(실측: "등록되지 않은 서비스키"). 모르는 상류 오류도 기본이
 // actionable이라 이 목록은 분류를 바꾸기보다 의도를 드러내는 쪽에 가깝다.
 const actionableUpstreamMarkers = [
