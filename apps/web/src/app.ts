@@ -157,14 +157,41 @@ function boardState(): BoardState {
   return route ? { kind: 'ready', route } : { kind: 'empty' };
 }
 
+/** 저장한 내 정류장이 실제로 어느 노선과 방향에 있는지 찾는다. 없으면 null. */
+function locateBoardingStop(payload: LatestPayload): Selection | null {
+  const stop = boardingStop;
+  if (!stop) return null;
+  const route = payload.routes.find((entry) => entry.route.name === stop.routeName);
+  const match = route?.stops.find((entry) => entry.sequence === stop.sequence);
+  if (!route || !match) return null;
+  // 회차점이 없는 노선은 정류장 목록을 방향으로 거르지 않으므로 지금 방향을 그대로 둔다
+  return { routeName: route.route.name, direction: match.direction ?? selection.direction };
+}
+
+// 내 정류장은 고를 때 방향까지 저장하는데 시작할 때는 읽지 않았다. 그래서 하행 정류장을
+// 저장한 사람이 기본 URL로 들어오면 상행 목록만 보고 매번 "내 정류장이 없어요"에 갇혔다.
+// 방향이 없는 옛 기록은 노선 데이터에서 정류장을 찾아 채운다.
+function restoreSelectionFromBoardingStop(): void {
+  const stop = boardingStop;
+  if (!stop) return;
+  const payload = latestPayload();
+  const located = payload ? locateBoardingStop(payload) : null;
+  selection.routeName = stop.routeName;
+  // 노선 데이터는 빌드마다 회차점을 다시 계산한다. 저장한 방향이 낡았을 수 있으므로
+  // 지금 데이터가 찾아 준 방향을 먼저 쓴다. 안 그러면 같은 막다른 결론이 영구히 반복된다.
+  selection.direction = located?.direction ?? stop.direction ?? selection.direction;
+}
+
 function readHash(): void {
   const [routeName, direction] = decodeURIComponent(location.hash.slice(1)).split('/');
   if (routeName) selection.routeName = routeName;
   if (direction === 'up' || direction === 'down') selection.direction = direction;
 }
 
-function writeHash(route: LatestRoute): void {
-  history.replaceState(null, '', `#${route.route.name}/${selection.direction}`);
+// 해시는 새로고침 때 저장값을 이기므로, 선택을 바꾸면 반드시 같이 갱신한다.
+// 안 그러면 낡은 해시가 방금 고른 노선과 방향을 되돌린다.
+function writeHash(): void {
+  history.replaceState(null, '', `#${selection.routeName ?? ''}/${selection.direction}`);
 }
 
 function setBanner(message: string | null): void {
@@ -498,6 +525,7 @@ function renderRouteTabs(payload: LatestPayload, route: LatestRoute): void {
     tab.addEventListener('click', () => {
       selection.routeName = entry.route.name;
       expandedStopSequence = null;
+      writeHash();
       render();
       void refreshLiveVehicles();
     });
@@ -521,9 +549,12 @@ function renderDirectionTabs(route: LatestRoute): void {
     tab.className = `direction-tab${selection.direction === direction ? ' active' : ''}`;
     tab.textContent = labels[direction];
     tab.addEventListener('click', () => {
+      // 노선은 첫 화면에서 payload 순서로 정해지고 selection에는 안 들어가 있을 수 있다.
+      // 해시에 빈 노선을 쓰지 않도록 지금 보고 있는 노선을 확정해 둔다.
+      selection.routeName = route.route.name;
       selection.direction = direction;
       expandedStopSequence = null;
-      writeHash(route);
+      writeHash();
       render();
     });
     return tab;
@@ -664,6 +695,7 @@ function renderConclusion(route: LatestRoute, frame: BoardFrame): void {
   let headlineText = '';
   const infoLines: Array<[string, string]> = [];
   let goTarget: DisplayStop | null = null;
+  let switchTarget: Selection | null = null;
 
   const recommendation = recommendationFor(route);
   const dataReady = readProfilePayload(window.__PROFILE__) !== null && readHistoryPayload(window.__HISTORY__) !== null;
@@ -683,7 +715,15 @@ function renderConclusion(route: LatestRoute, frame: BoardFrame): void {
     infoLines.push(['ccl-why', '연결을 확인하고 새로고침해 주세요. 실시간 좌석은 아래에서 그대로 볼 수 있어요.']);
   } else if (recommendation.kind === 'elsewhere') {
     headlineText = '이 노선과 방향에 내 정류장이 없어요';
-    infoLines.push(['ccl-why', '노선이나 방향을 바꾸거나, 아래에서 정류장을 다시 골라 주세요.']);
+    // 안내만 하고 끝내면 왜 사라졌는지 모른 채 갇힌다. 갈 곳을 알면 한 번에 보낸다.
+    const payload = latestPayload();
+    const located = payload ? locateBoardingStop(payload) : null;
+    switchTarget = located && (located.routeName !== selection.routeName || located.direction !== selection.direction)
+      ? located
+      : null;
+    infoLines.push(['ccl-why', switchTarget
+      ? `${boardingStop?.name ?? '내 정류장'}은 다른 쪽에 있어요. 아래 버튼으로 옮기거나 정류장을 다시 고르세요.`
+      : '노선이나 방향을 바꾸거나, 아래에서 정류장을 다시 골라 주세요.']);
   } else if (recommendation.kind === 'insufficient') {
     headlineText = '아직 판정할 표본이 부족해요';
     if (myDetail) infoLines.push(['ccl-detail', myDetail]);
@@ -755,6 +795,20 @@ function renderConclusion(route: LatestRoute, frame: BoardFrame): void {
   } else {
     go.hidden = true;
     delete go.dataset.sequence;
+  }
+  const switchChip = getElement<HTMLButtonElement>('conclusion-switch');
+  if (switchTarget) {
+    switchChip.hidden = false;
+    switchChip.dataset.routeName = switchTarget.routeName ?? '';
+    switchChip.dataset.direction = switchTarget.direction;
+    const label = switchTarget.routeName === selection.routeName
+      ? '반대 방향에서 찾기'
+      : `${switchTarget.routeName}번에서 찾기`;
+    if (switchChip.textContent !== label) switchChip.textContent = label;
+  } else {
+    switchChip.hidden = true;
+    delete switchChip.dataset.routeName;
+    delete switchChip.dataset.direction;
   }
   getElement<HTMLButtonElement>('conclusion-clear').hidden = !boardingStop;
   const recordChip = getElement<HTMLButtonElement>('conclusion-record');
@@ -1088,6 +1142,18 @@ getElement<HTMLButtonElement>('conclusion-clear').addEventListener('click', () =
   render();
 });
 
+getElement<HTMLButtonElement>('conclusion-switch').addEventListener('click', () => {
+  const chip = getElement<HTMLButtonElement>('conclusion-switch');
+  const routeName = chip.dataset.routeName;
+  const direction = chip.dataset.direction;
+  if (!routeName || (direction !== 'up' && direction !== 'down')) return;
+  selection = { routeName, direction };
+  expandedStopSequence = null;
+  writeHash();
+  render();
+  void refreshLiveVehicles();
+});
+
 getElement<HTMLButtonElement>('conclusion-record').addEventListener('click', () => {
   recordFormOpen = !recordFormOpen;
   render();
@@ -1161,10 +1227,6 @@ function loadDeferredData(): void {
   }
 }
 
-readHash();
-render();
-loadDeferredData();
-loadLiveConfig();
 setInterval(reloadData, 60_000);
 // 라이브 폴링은 탭이 보일 때만 돈다 (공유 API 키의 일일 쿼터 보호, v2 §14.8)
 setInterval(() => {
@@ -1225,7 +1287,18 @@ function applyEntryPreset(): EntryPreset | null {
   return preset;
 }
 
-applyEntryPreset();
+// 우선순위는 QR 프리셋, 해시, 저장한 내 정류장 순이다. 프리셋이 첫 render()와
+// loadLiveConfig()보다 먼저 적용돼야 카드를 받은 사람이 다른 노선 화면을 보거나
+// 엉뚱한 노선의 실시간 좌석을 받아 일일 호출을 버리지 않는다.
+if (applyEntryPreset()) {
+  writeHash();
+} else {
+  restoreSelectionFromBoardingStop();
+  readHash(); // 남이 보낸 링크가 내 저장값을 이긴다
+}
+render();
+loadDeferredData();
+loadLiveConfig();
 
 // ── 익명 방문 계측 ──
 // 통근 도구의 결정적 지표는 재방문율이다. 한 번 열고 마는 것은 구경이고 사흘 뒤에도
