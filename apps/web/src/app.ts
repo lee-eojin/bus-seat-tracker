@@ -1,3 +1,6 @@
+import { requestJson, type ApiFailure } from './api/client.js';
+import { createLatestRequestGate } from './api/latestRequestGate.js';
+import { nextPollFrom, type PollDecision } from './api/pollSchedule.js';
 import type { BoardingVerdict } from '../../../packages/domain/src/boarding.js';
 import { forecastVehicleStops, type SeatForecast } from '../../../packages/domain/src/forecast.js';
 import { arrivalRateAt, detectLiveClearing, estimateQueueAt, inferQueueClearing, queueRange, queueWindowAt } from '../../../packages/domain/src/queue.js';
@@ -42,8 +45,10 @@ type RouteLocationState =
 // 서버 프록시. GBIS 키는 서버 env에만 있고 브라우저는 노선명만 보낸다.
 const liveApiUrl = '/api/live';
 const liveFreshLimit = 180_000;
-const livePollIntervalMs = 30_000;
 const phase0LogLimit = 600;
+// 폴링 주기 상수는 두지 않는다. 응답의 Cache-Control과 Age가 남은 수명을 알려주므로
+// 다음 호출 시각은 pollSchedule.ts가 그 값에서 만든다. 예전에는 여기 30초가 박혀 있었고
+// 서버는 같은 응답을 120초 동안 쓰게 하고 있었다.
 
 interface BoardingStop {
   routeName: string;
@@ -261,35 +266,71 @@ function appendPhase0Observation(route: LatestRoute, vehicles: DisplayVehicle[],
   }
 }
 
+// 진행 중인 조회는 하나뿐이다. 노선이나 방향을 빠르게 바꿔도 앞선 응답이 뒤늦게 도착해
+// 방금 고른 노선을 덮지 않는다.
+const liveGate = createLatestRequestGate();
+let livePollTimer: number | undefined;
+
+function clearLivePoll(): void {
+  if (livePollTimer !== undefined) {
+    window.clearTimeout(livePollTimer);
+    livePollTimer = undefined;
+  }
+}
+
+// 배경으로 열어만 둔 탭은 부르지 않는다. 공유 API 키의 일일 쿼터를 지킨다.
+function scheduleLivePoll(decision: PollDecision): void {
+  clearLivePoll();
+  if (decision.kind !== 'again' || document.visibilityState !== 'visible') return;
+  livePollTimer = window.setTimeout(() => { void refreshLiveVehicles(); }, decision.delayMs);
+}
+
+function liveFailureText(failure: ApiFailure): string {
+  switch (failure.kind) {
+    case 'contract': return `서버가 ${failure.status}로 거부했습니다 (${failure.error.error})`;
+    case 'rateLimited': return '요청이 너무 잦아 서버가 잠시 막았습니다';
+    case 'malformed': return `응답이 아는 형식이 아닙니다 (상태 ${failure.status})`;
+    case 'timeout': return '10초 안에 응답이 오지 않았습니다';
+    case 'aborted': return '새 요청이 이 요청을 대신했습니다';
+    case 'network': return `연결하지 못했습니다 (${failure.cause instanceof Error ? failure.cause.message : String(failure.cause)})`;
+  }
+}
+
 async function refreshLiveVehicles(): Promise<void> {
   const state = boardState();
   if (state.kind !== 'ready') return;
   const route = state.route;
   const requestUrl = new URL(liveApiUrl, location.origin);
   requestUrl.search = new URLSearchParams({ route: route.route.name }).toString();
-  try {
-    const response = await fetch(requestUrl, { signal: AbortSignal.timeout(10_000) });
-    if (!response.ok) throw new Error(`상태 ${response.status}`);
-    const payload = await response.json() as unknown;
+
+  clearLivePoll();
+  const ticket = liveGate.issue();
+  const result = await requestJson<unknown>(requestUrl, { signal: ticket.signal });
+  // 뒤늦게 온 응답은 버린다. 다음 호출은 우리를 밀어낸 요청이 잡는다.
+  if (!ticket.isLatest()) return;
+
+  if (result.ok) {
     live = {
       routeId: route.route.id,
-      vehicles: readLiveVehicles(payload, route.turnSequence),
+      vehicles: readLiveVehicles(result.body, route.turnSequence),
       // 수신 시각에서 CDN 캐시 나이(Age 헤더)를 빼 데이터의 실제 나이를 잰다. 캐시나
       // stale-while-revalidate로 낡은 응답을 받아도 나이가 정직하게 표시되고, 한도
       // (180초)를 넘으면 스냅샷 표시로 자연 강등된다. 서버 벽시계(apiQueryTime)와
       // 비교하지 않는 이유는 시계가 몇 분 어긋난 기기에서 실시간 표시가 조용히
       // 죽기 때문이다. Age는 기간 값이라 시계 오차와 무관하다.
-      fetchedAt: Date.now() - Math.max(0, Number(response.headers.get('age') ?? '0') || 0) * 1000,
+      fetchedAt: Date.now() - result.lifetime.ageSeconds * 1000,
     };
-    appendPhase0Observation(route, live.vehicles, readApiQueryTime(payload));
+    appendPhase0Observation(route, live.vehicles, readApiQueryTime(result.body));
     // 해소 추적은 폴링 때마다 해야 한다. 렌더 시점에는 이미 버스가 지나간 뒤다.
     if (boardingStop && boardingStop.routeName === route.route.name) {
       trackClearings(route.route.name, live.vehicles, boardingStop.sequence);
     }
     render();
-  } catch (error: unknown) {
-    console.warn(`실시간 좌석 조회 실패, 스냅샷으로 표시합니다: ${error instanceof Error ? error.message : String(error)}`);
+  } else {
+    console.warn(`실시간 좌석 조회 실패, 스냅샷으로 표시합니다: ${liveFailureText(result.failure)}`);
   }
+
+  scheduleLivePoll(nextPollFrom(result));
 }
 
 function currentSeoulBucket(): { bucket: number; weekend: boolean } {
@@ -1228,12 +1269,15 @@ function loadDeferredData(): void {
 }
 
 setInterval(reloadData, 60_000);
-// 라이브 폴링은 탭이 보일 때만 돈다 (공유 API 키의 일일 쿼터 보호, v2 §14.8)
-setInterval(() => {
-  if (document.visibilityState === 'visible') void refreshLiveVehicles();
-}, livePollIntervalMs);
+// 라이브 폴링은 탭이 보일 때만 돈다 (공유 API 키의 일일 쿼터 보호, v2 §14.8).
+// 고정 간격으로 돌지 않는다. 응답을 하나 받을 때마다 그 응답의 남은 수명으로 다음 한 번을
+// 예약한다(scheduleLivePoll). 그래서 여기 setInterval이 없다.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') void refreshLiveVehicles();
+  if (document.visibilityState === 'visible') {
+    void refreshLiveVehicles();
+  } else {
+    clearLivePoll();
+  }
 });
 setInterval(() => {
   const state = boardState();

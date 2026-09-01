@@ -7,10 +7,20 @@ const projectRoot = path.resolve(here, '..', '..', '..');
 const publicDirectory = path.join(projectRoot, 'apps', 'web', 'public');
 const siteDirectory = path.join(projectRoot, 'site');
 const webOutputDirectory = path.join(projectRoot, 'dist', 'apps', 'web', 'src');
+const webApiOutputDirectory = path.join(webOutputDirectory, 'api');
 const domainOutputDirectory = path.join(projectRoot, 'dist', 'packages', 'domain', 'src');
 
 function requirePath(target, description) {
   if (!existsSync(target)) throw new Error(`${description}이 없습니다: ${target}`);
+}
+
+// 브라우저 코드는 번들링하지 않는다. import가 가리키는 모듈을 같은 상대 경로에 그대로
+// 둬야 화면이 뜬다. 시험 파일은 브라우저가 안 부르므로 뺀다.
+function copyModules(from, to) {
+  mkdirSync(to, { recursive: true });
+  for (const fileName of readdirSync(from).filter((name) => name.endsWith('.js') && !name.endsWith('.test.js'))) {
+    cpSync(path.join(from, fileName), path.join(to, fileName));
+  }
 }
 
 for (const fileName of ['index.html', 'legal.html']) {
@@ -20,6 +30,7 @@ for (const fileName of ['latest.js', 'daily.js', 'history.js', 'profile.js']) {
   requirePath(path.join(publicDirectory, 'data', fileName), `화면 데이터 ${fileName}`);
 }
 requirePath(path.join(webOutputDirectory, 'app.js'), '웹 실행 파일 app.js');
+requirePath(webApiOutputDirectory, '웹 요청 계층 출력 디렉터리');
 requirePath(domainOutputDirectory, '도메인 모듈 출력 디렉터리');
 
 rmSync(siteDirectory, { recursive: true, force: true });
@@ -29,11 +40,8 @@ const siteWebDirectory = path.join(siteDirectory, 'dist', 'apps', 'web', 'src');
 mkdirSync(siteWebDirectory, { recursive: true });
 cpSync(path.join(webOutputDirectory, 'app.js'), path.join(siteWebDirectory, 'app.js'));
 
-const siteDomainDirectory = path.join(siteDirectory, 'dist', 'packages', 'domain', 'src');
-mkdirSync(siteDomainDirectory, { recursive: true });
-for (const fileName of readdirSync(domainOutputDirectory).filter((name) => name.endsWith('.js') && !name.endsWith('.test.js'))) {
-  cpSync(path.join(domainOutputDirectory, fileName), path.join(siteDomainDirectory, fileName));
-}
+copyModules(webApiOutputDirectory, path.join(siteWebDirectory, 'api'));
+copyModules(domainOutputDirectory, path.join(siteDirectory, 'dist', 'packages', 'domain', 'src'));
 
 const legacyDirectory = path.join(siteDirectory, 'prototype-bus');
 mkdirSync(legacyDirectory, { recursive: true });
