@@ -1,4 +1,4 @@
-import { asList, isRecord, readGbisResultError, readIdentifier, readNumber, readUpstreamErrorEnvelope } from '../../../packages/domain/src/model.js';
+import { asList, isRecord, readGbisResultError, readIdentifier, readNumber, readUpstreamErrorEnvelope, type LiveSnapshot, type LiveVehicle } from '../../../packages/domain/src/model.js';
 
 // GBIS 클라이언트 (서버 전용).
 //
@@ -15,20 +15,6 @@ export const allowedRoutes: Record<string, string> = {
   '3330': '204000057',
   '1650': '234000050',
 };
-
-export interface LiveVehicle {
-  currentStopSequence: number | null;
-  remainingSeats: number | null;
-  crowded: number | null;
-  status: number | null;
-}
-
-export interface LiveSnapshot {
-  routeName: string;
-  routeId: string;
-  apiQueryTime: string | null;
-  vehicles: LiveVehicle[];
-}
 
 export class GbisError extends Error {
   constructor(message: string, readonly status: number) {
@@ -84,8 +70,12 @@ export async function fetchLiveSnapshot(routeName: string, apiKey: string): Prom
   requestUrl.search = new URLSearchParams({ serviceKey: apiKey, format: 'json', routeId }).toString();
 
   let response: Response;
+  let observedAt: string;
   try {
     response = await fetch(requestUrl, { signal: AbortSignal.timeout(requestTimeoutMs) });
+    // 상류 응답을 받은 우리 시각이다. 상류가 적어 보낸 queryTime은 남의 벽시계라 기준으로
+    // 삼지 않는다. 실측에서 queryTime이 우리 수신 시각보다 뒤에 있는 경우가 있었다.
+    observedAt = new Date().toISOString();
   } catch (error: unknown) {
     // 타임아웃과 네트워크 오류를 502로 정규화한다. GBIS 원문을 그대로 흘리면 키가 섞일 수 있다.
     throw new GbisError(`GBIS 응답을 받지 못했습니다: ${failureCodes(error)}`, 502);
@@ -122,5 +112,5 @@ export async function fetchLiveSnapshot(routeName: string, apiKey: string): Prom
     .map(readVehicle)
     .filter((vehicle): vehicle is LiveVehicle => vehicle !== null);
 
-  return { routeName, routeId, apiQueryTime: readQueryTime(payload), vehicles };
+  return { routeName, routeId, apiQueryTime: readQueryTime(payload), observedAt, vehicles };
 }
