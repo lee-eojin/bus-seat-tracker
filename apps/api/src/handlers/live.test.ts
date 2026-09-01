@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import handler from './live.js';
+import handler, { staleAtFor } from './live.js';
 
 // GBIS 호출 전에 반환되는 거부 경로만 검증한다. 통과 경로는 실제 네트워크가 필요해
 // 여기서 다루지 않는다.
@@ -170,5 +170,20 @@ describe('/api/live GBIS 결과 코드', () => {
     });
     assert.equal(state.status, 200);
     assert.match(state.headers['Cache-Control'] ?? '', /public, s-maxage=/);
+  });
+});
+
+describe('staleAtFor', () => {
+  it('관측 시각에 신선도 창(캐시 120초 + 여유 60초)을 더한다', () => {
+    assert.equal(staleAtFor('2026-09-02T03:00:00.000Z'), '2026-09-02T03:03:00.000Z');
+  });
+
+  it('오프셋이 붙은 시각도 UTC로 정규화해서 낸다 (화면이 파싱해 비교하는 값이라 형식이 하나여야 한다)', () => {
+    assert.equal(staleAtFor('2026-09-02T12:00:00+09:00'), '2026-09-02T03:03:00.000Z');
+  });
+
+  it('낡음 선은 언제나 관측 시각보다 뒤다', () => {
+    const observedAt = '2026-09-02T03:00:00.000Z';
+    assert.ok(Date.parse(staleAtFor(observedAt)) > Date.parse(observedAt));
   });
 });

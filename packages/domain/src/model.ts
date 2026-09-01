@@ -48,6 +48,40 @@ export interface Snapshot {
   vehicles: VehicleSnapshot[];
 }
 
+/**
+ * `/api/live` 응답 계약.
+ *
+ * 서버(apps/api)와 브라우저(apps/web)가 같은 모양을 각자 알고 있다가 어긋난 적이 있어
+ * 선언을 한곳으로 모았다. 브라우저는 이 타입을 믿고 읽지 않는다. 망으로 들어오는 값이라
+ * 런타임 검증을 따로 하고, 이 선언은 두 쪽이 같은 모양을 말하는지 타입 검사로 묶는 용도다.
+ *
+ * 차량번호(plateNo)와 원본 차량 ID(vehId)는 여기 없다. 없는 것이 데이터 경계다.
+ * 필드를 늘리기 전에 CLAUDE.md의 데이터 경계 절을 본다.
+ */
+export interface LiveVehicle {
+  currentStopSequence: number | null;
+  remainingSeats: number | null;
+  crowded: number | null;
+  status: number | null;
+}
+
+/** 상류에서 읽어 온 한 판. 낡음 선(staleAt)은 서빙 정책이라 여기 없다. */
+export interface LiveSnapshot {
+  routeName: string;
+  routeId: string;
+  /** GBIS가 적어 보낸 벽시계 문자열. 우리 시계와 비교하지 않는다. */
+  apiQueryTime: string | null;
+  /** 우리 서버가 상류 응답을 받은 시각. staleAt의 기준이다. */
+  observedAt: string;
+  vehicles: LiveVehicle[];
+}
+
+/** `/api/live`가 실제로 내보내는 본문. 서버가 낡음 선을 붙인 것이다. */
+export interface LiveResponse extends LiveSnapshot {
+  /** 이 관측을 실시간이라 말할 수 있는 마지막 시각. 화면은 이 선을 넘기면 스냅샷으로 내려간다. */
+  staleAt: string;
+}
+
 export interface RouteCache {
   cachedAt: string;
   route: Route;
