@@ -1,6 +1,7 @@
 import { requestJson, type ApiFailure } from './api/client.js';
 import { createLatestRequestGate } from './api/latestRequestGate.js';
 import { nextPollFrom, type PollDecision } from './api/pollSchedule.js';
+import { referenceClockFrom, type ReferenceClock } from './api/referenceClock.js';
 import type { BoardingVerdict } from '../../../packages/domain/src/boarding.js';
 import { forecastVehicleStops, type SeatForecast } from '../../../packages/domain/src/forecast.js';
 import { arrivalRateAt, detectLiveClearing, estimateQueueAt, inferQueueClearing, queueRange, queueWindowAt } from '../../../packages/domain/src/queue.js';
@@ -29,6 +30,8 @@ interface LiveOverlay {
   routeId: string | null;
   vehicles: DisplayVehicle[];
   fetchedAt: number | null;
+  // 서버가 선언한 낡음 판정선 (서버 시계). 이 선을 넘기면 실시간 표시를 내린다.
+  staleAt: number | null;
 }
 
 interface RouteCoordinates {
@@ -44,6 +47,8 @@ type RouteLocationState =
 
 // 서버 프록시. GBIS 키는 서버 env에만 있고 브라우저는 노선명만 보낸다.
 const liveApiUrl = '/api/live';
+// 서버가 낡음 선(staleAt)을 못 줄 때만 쓰는 후퇴값이다. 주인은 서버 쪽
+// (apps/api/src/handlers/live.ts의 freshnessSeconds)이고 이 값은 그것과 같은 180초다.
 const liveFreshLimit = 180_000;
 const phase0LogLimit = 600;
 // 폴링 주기 상수는 두지 않는다. 응답의 Cache-Control과 Age가 남은 수명을 알려주므로
@@ -73,7 +78,9 @@ interface BoardingRecord {
 let selection: Selection = { routeName: null, direction: 'up' };
 let destination = localStorage.getItem('bus-destination');
 let expandedStopSequence: number | null = null;
-let live: LiveOverlay = { routeId: null, vehicles: [], fetchedAt: null };
+let live: LiveOverlay = { routeId: null, vehicles: [], fetchedAt: null, staleAt: null };
+// 마지막으로 받은 서버 기준 시계. 응답 하나라도 받으면 채워진다.
+let serverClock: ReferenceClock | null = null;
 let boardingStop = readBoardingStop();
 let recordFormOpen = false;
 let routeLocation: RouteLocationState = { kind: 'idle' };
@@ -93,6 +100,29 @@ function readBoardingStop(): BoardingStop | null {
   } catch {
     return null;
   }
+}
+
+// 신선도는 서버 기준 시계로 잰다.
+//
+// 기기 시계가 몇 분 어긋나면 등급과 배너가 통째로 뒤집힌다. 시계가 앞선 기기는 정상 수집인데
+// 경고를 띄우고, 뒤처진 기기는 몇 시간 끊긴 수집을 방금 수집됨으로 표시한다. 라이브 응답의
+// 나이를 Age 헤더로 재는 규칙은 이미 있었는데 수집 신선도에는 적용돼 있지 않았다.
+//
+// 시계는 우리가 이미 보내는 응답에서 얻는다. 이것 때문에 요청을 더 내지 않는다.
+// 출처는 셋이다. 발행 데이터 확인(reloadData), 방문 계측(recordVisit), 라이브 조회.
+function rememberServerClock(clock: ReferenceClock | null): void {
+  if (clock === null) return;
+  const first = serverClock === null;
+  serverClock = clock;
+  // 첫 시계가 오기 전 렌더는 기기 시계로 그려졌다. 도착하는 즉시 고쳐 그린다.
+  if (!first) return;
+  const state = boardState();
+  if (state.kind === 'ready') renderFreshness(state.route);
+}
+
+/** 지금 시각. 서버 응답을 한 번도 못 받았을 때만 기기 시계로 물러난다. */
+function referenceNow(): number {
+  return serverClock === null ? Date.now() : serverClock.now();
 }
 
 function getElement<T extends HTMLElement>(id: string): T {
@@ -127,7 +157,7 @@ function seatLabel(vehicle: DisplayVehicle): string {
 
 function minutesSince(isoText: string | null): number | null {
   if (!isoText) return null;
-  const elapsed = Date.now() - new Date(isoText).getTime();
+  const elapsed = referenceNow() - new Date(isoText).getTime();
   return Number.isFinite(elapsed) ? Math.max(0, Math.round(elapsed / 60_000)) : null;
 }
 
@@ -206,8 +236,12 @@ function setBanner(message: string | null): void {
   if (message) banner.textContent = message;
 }
 
+// 낡음 선을 긋는 쪽은 서버다. 캐시 시간을 아는 쪽이 그 선도 알아야 한다.
+// 서버가 선을 안 줬거나(옛 배포) 기준 시계를 못 만들었을 때만 브라우저 후퇴값을 쓴다.
 function liveIsFresh(route: LatestRoute): boolean {
-  return live.routeId === route.route.id && live.fetchedAt !== null && Date.now() - live.fetchedAt < liveFreshLimit;
+  if (live.routeId !== route.route.id) return false;
+  if (live.staleAt !== null && serverClock !== null) return serverClock.now() < live.staleAt;
+  return live.fetchedAt !== null && Date.now() - live.fetchedAt < liveFreshLimit;
 }
 
 function directionOf(sequence: number | null, turnSequence: number | null): Direction | null {
@@ -230,6 +264,15 @@ function readLiveVehicles(payload: unknown, turnSequence: number | null): Displa
       direction: directionOf(stationSeq, turnSequence),
     }];
   });
+}
+
+// 서버가 선언한 낡음 선. 옛 배포는 이 필드가 없으므로 null이 정상 경로다.
+function readStaleAt(payload: unknown): number | null {
+  if (!isRecord(payload)) return null;
+  const text = readIdentifier(payload.staleAt);
+  if (text === null) return null;
+  const at = Date.parse(text);
+  return Number.isFinite(at) ? at : null;
 }
 
 function readApiQueryTime(payload: unknown): string | null {
@@ -310,14 +353,16 @@ async function refreshLiveVehicles(): Promise<void> {
   if (!ticket.isLatest()) return;
 
   if (result.ok) {
+    rememberServerClock(result.clock);
     live = {
       routeId: route.route.id,
       vehicles: readLiveVehicles(result.body, route.turnSequence),
+      staleAt: readStaleAt(result.body),
       // 수신 시각에서 CDN 캐시 나이(Age 헤더)를 빼 데이터의 실제 나이를 잰다. 캐시나
-      // stale-while-revalidate로 낡은 응답을 받아도 나이가 정직하게 표시되고, 한도
-      // (180초)를 넘으면 스냅샷 표시로 자연 강등된다. 서버 벽시계(apiQueryTime)와
-      // 비교하지 않는 이유는 시계가 몇 분 어긋난 기기에서 실시간 표시가 조용히
-      // 죽기 때문이다. Age는 기간 값이라 시계 오차와 무관하다.
+      // stale-while-revalidate로 낡은 응답을 받아도 나이가 정직하게 표시된다. 화면의
+      // "N초 전 조회"가 이 값에서 나오고, 서버가 낡음 선을 안 준 경우의 후퇴 판정도 여기서 한다.
+      // 서버 벽시계(apiQueryTime)와 비교하지 않는 이유는 시계가 몇 분 어긋난 기기에서
+      // 실시간 표시가 조용히 죽기 때문이다. Age는 기간 값이라 시계 오차와 무관하다.
       fetchedAt: Date.now() - result.lifetime.ageSeconds * 1000,
     };
     appendPhase0Observation(route, live.vehicles, readApiQueryTime(result.body));
@@ -1133,12 +1178,46 @@ function render(): void {
   renderAxis(state.route, frame);
 }
 
-function reloadData(): void {
+// ── 발행 데이터 재로딩 ──
+//
+// 예전에는 60초마다 `data/latest.js?v=${Date.now()}`를 다시 받았다. 캐시버스터가 매번
+// 달라져 CDN 캐시도 브라우저 캐시도 못 썼고, 24KB짜리 파일을 시간당 60번 내려받았다.
+// 발행은 30분 주기이므로(.github/workflows/publish-pages.yml의 17,47 크론) 그중 58번은
+// 방금 받은 것과 같은 파일이었다.
+//
+// 지금은 두 단계다. 먼저 HEAD로 판 표식(ETag 또는 Last-Modified)만 확인하고, 바뀌었을 때만
+// 본문을 받는다. 주소의 v는 판 표식이라 같은 판이면 주소도 같아 캐시가 산다.
+// HEAD 응답은 서버 기준 시계의 출처도 된다. 라이브 API가 죽어 있어도 신선도 표시가
+// 기기 시계로 흐르지 않게 하는 것이 이 쪽 이득이다.
+const dataReloadIntervalMs = 600_000;
+const publishedDataUrl = 'data/latest.js';
+let publishedDataTag: string | null = null;
+
+async function reloadData(): Promise<void> {
+  let probe: Response;
+  try {
+    probe = await fetch(publishedDataUrl, { method: 'HEAD', cache: 'no-store' });
+  } catch {
+    return; // 다음 주기에 다시 본다. 화면은 지금 있는 판으로 계속 답한다
+  }
+  if (!probe.ok) return;
+  rememberServerClock(referenceClockFrom(probe.headers));
+
+  const tag = probe.headers.get('etag') ?? probe.headers.get('last-modified');
+  if (tag !== null && tag === publishedDataTag) return;
+  publishedDataTag = tag;
+  loadPublishedData(tag);
+}
+
+function loadPublishedData(tag: string | null): void {
+  const previous = latestPayload()?.generatedAt ?? null;
   const script = document.createElement('script');
-  script.src = `data/latest.js?v=${Date.now()}`;
+  // 표식이 없는 서버에서는 예전처럼 시각을 쓴다. 주기가 10분이라 캐시를 죽여도 6회다.
+  script.src = `${publishedDataUrl}?v=${encodeURIComponent(tag ?? String(Date.now()))}`;
   script.addEventListener('load', () => {
     script.remove();
-    render();
+    // 같은 판을 다시 실행한 것이면 화면을 건드리지 않는다. 재렌더는 축을 통째로 다시 만든다.
+    if ((latestPayload()?.generatedAt ?? null) !== previous) render();
   });
   script.addEventListener('error', () => script.remove());
   document.body.append(script);
@@ -1268,13 +1347,17 @@ function loadDeferredData(): void {
   }
 }
 
-setInterval(reloadData, 60_000);
+setInterval(() => {
+  if (document.visibilityState === 'visible') void reloadData();
+}, dataReloadIntervalMs);
 // 라이브 폴링은 탭이 보일 때만 돈다 (공유 API 키의 일일 쿼터 보호, v2 §14.8).
 // 고정 간격으로 돌지 않는다. 응답을 하나 받을 때마다 그 응답의 남은 수명으로 다음 한 번을
 // 예약한다(scheduleLivePoll). 그래서 여기 setInterval이 없다.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     void refreshLiveVehicles();
+    // 오래 접어 뒀다 돌아오면 발행이 여러 판 지났을 수 있다. 다음 주기까지 기다리지 않는다.
+    void reloadData();
   } else {
     clearLivePoll();
   }
@@ -1368,6 +1451,9 @@ function recordVisit(): void {
       visitorId: visitorId(),
       entry: new URLSearchParams(location.search).get('at'),
     }),
+  }).then((response) => {
+    // 계측 자체보다 이 응답의 Date 헤더가 값지다. 첫 화면의 신선도를 기기 시계로 안 그리게 한다.
+    rememberServerClock(referenceClockFrom(response.headers));
   }).catch(() => { /* 계측 실패가 화면을 막지 않는다 */ });
 }
 
