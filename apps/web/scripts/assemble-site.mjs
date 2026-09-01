@@ -18,7 +18,8 @@ function requirePath(target, description) {
 // 둬야 화면이 뜬다. 시험 파일은 브라우저가 안 부르므로 뺀다.
 function copyModules(from, to) {
   mkdirSync(to, { recursive: true });
-  for (const fileName of readdirSync(from).filter((name) => name.endsWith('.js') && !name.endsWith('.test.js'))) {
+  const isRunnable = (name) => name.endsWith('.js') && !name.endsWith('.test.js') && !name.endsWith('.typeTest.js');
+  for (const fileName of readdirSync(from).filter(isRunnable)) {
     cpSync(path.join(from, fileName), path.join(to, fileName));
   }
 }

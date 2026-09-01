@@ -1,4 +1,5 @@
 import { allowedRoutes, fetchLiveSnapshot, GbisError } from '../gbis-client.js';
+import type { LiveResponse } from '../../../../packages/domain/src/model.js';
 
 // GET /api/live?route=3330
 //
@@ -10,6 +11,19 @@ import { allowedRoutes, fetchLiveSnapshot, GbisError } from '../gbis-client.js';
 // 노선당 120초에 1회로 유지된다.
 const cacheSeconds = 120;
 const staleWhileRevalidateSeconds = 240;
+
+// 이 관측을 실시간이라 부를 수 있는 기간.
+//
+// 공유 캐시가 최대 cacheSeconds 만큼 묵은 응답을 정상적으로 내주므로 그만큼은 낡음이 아니다.
+// 거기에 여유 1분을 더한다. 이 선을 넘긴 응답을 받으면 화면은 실시간 표시를 내리고 빌드 시점
+// 스냅샷으로 돌아간다. 예전에는 브라우저가 이 값을 180초 상수로 혼자 들고 있어서, 여기 캐시
+// 시간을 바꿔도 브라우저가 안 따라왔다. 선을 긋는 쪽과 캐시를 정하는 쪽이 같아야 한다.
+const freshnessSeconds = cacheSeconds + 60;
+
+/** 관측 시각에 신선도 창을 더한 낡음 판정선. 화면이 이 값을 서버 기준 시계와 견준다. */
+export function staleAtFor(observedAt: string): string {
+  return new Date(Date.parse(observedAt) + freshnessSeconds * 1000).toISOString();
+}
 
 interface RequestLike {
   method?: string;
@@ -65,8 +79,9 @@ export default async function handler(request: RequestLike, response: ResponseLi
 
   try {
     const snapshot = await fetchLiveSnapshot(routeName, apiKey);
+    const body: LiveResponse = { ...snapshot, staleAt: staleAtFor(snapshot.observedAt) };
     response.setHeader('Cache-Control', `public, s-maxage=${cacheSeconds}, stale-while-revalidate=${staleWhileRevalidateSeconds}`);
-    response.status(200).json(snapshot);
+    response.status(200).json(body);
   } catch (error: unknown) {
     const status = error instanceof GbisError ? error.status : 502;
     const message = error instanceof GbisError ? error.message : '실시간 조회에 실패했습니다.';
