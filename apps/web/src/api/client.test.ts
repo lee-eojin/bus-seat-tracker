@@ -24,7 +24,7 @@ function neverResponds(): void {
 describe('requestJson 성공', () => {
   it('본문과 남은 수명을 함께 돌려준다', async () => {
     respondWith({ routeName: '3330', vehicles: [] }, 200, {
-      'cache-control': 'public, s-maxage=120, stale-while-revalidate=240',
+      'cache-control': 'public, max-age=120',
       age: '30',
     });
 

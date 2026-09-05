@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import handler, { staleAtFor } from './live.js';
+import handler, { browserCacheControl, cdnCacheControl, staleAtFor } from './live.js';
 
 // GBIS 호출 전에 반환되는 거부 경로만 검증한다. 통과 경로는 실제 네트워크가 필요해
 // 여기서 다루지 않는다.
@@ -131,7 +131,10 @@ describe('/api/live 상류 오류 처리', () => {
       response: { msgHeader: { queryTime: '2026-08-08 21:00:00' }, msgBody: { busLocationList: [] } },
     });
     assert.equal(state.status, 200);
-    assert.match(state.headers['Cache-Control'] ?? '', /public, s-maxage=/);
+    // CDN 몫과 브라우저 몫을 따로 낸다. 한 헤더에 다 적으면 Vercel이 s-maxage를 지워
+    // 브라우저가 다음 조회 시각을 못 만든다.
+    assert.match(state.headers['Vercel-CDN-Cache-Control'] ?? '', /s-maxage=/);
+    assert.match(state.headers['Cache-Control'] ?? '', /max-age=/);
   });
 });
 
@@ -169,7 +172,10 @@ describe('/api/live GBIS 결과 코드', () => {
       response: { msgHeader: { resultCode: 4, resultMessage: '결과가 존재하지 않습니다.' }, msgBody: {} },
     });
     assert.equal(state.status, 200);
-    assert.match(state.headers['Cache-Control'] ?? '', /public, s-maxage=/);
+    // CDN 몫과 브라우저 몫을 따로 낸다. 한 헤더에 다 적으면 Vercel이 s-maxage를 지워
+    // 브라우저가 다음 조회 시각을 못 만든다.
+    assert.match(state.headers['Vercel-CDN-Cache-Control'] ?? '', /s-maxage=/);
+    assert.match(state.headers['Cache-Control'] ?? '', /max-age=/);
   });
 });
 
@@ -185,5 +191,29 @@ describe('staleAtFor', () => {
   it('낡음 선은 언제나 관측 시각보다 뒤다', () => {
     const observedAt = '2026-09-02T03:00:00.000Z';
     assert.ok(Date.parse(staleAtFor(observedAt)) > Date.parse(observedAt));
+  });
+});
+
+describe('캐시 지시를 CDN 몫과 브라우저 몫으로 가른다', () => {
+  it('CDN 몫에만 s-maxage와 stale-while-revalidate가 있다', () => {
+    assert.match(cdnCacheControl, /s-maxage=120/);
+    assert.match(cdnCacheControl, /stale-while-revalidate=240/);
+  });
+
+  it('브라우저 몫에는 stale-while-revalidate를 넣지 않는다', () => {
+    // 넣으면 브라우저가 낡은 응답을 자기 캐시에서 계속 내준다 (실측 확인).
+    assert.doesNotMatch(browserCacheControl, /stale-while-revalidate/);
+  });
+
+  it('브라우저 몫이 수명을 숫자로 밝힌다 (화면이 다음 조회 시각을 여기서 만든다)', () => {
+    // 이 값이 없으면 pollSchedule이 대체값 60초나 하한 5초로 흐른다.
+    assert.match(browserCacheControl, /max-age=120/);
+  });
+
+  it('브라우저가 자기 사본을 쓰는 동안에도 낡음 선을 안 넘는다', () => {
+    const maxAge = Number(/max-age=(\d+)/.exec(browserCacheControl)?.[1]);
+    const observedAt = '2026-09-05T03:00:00.000Z';
+    const window = (Date.parse(staleAtFor(observedAt)) - Date.parse(observedAt)) / 1000;
+    assert.ok(maxAge <= window, `브라우저 수명 ${maxAge}초가 신선도 창 ${window}초를 넘으면 안 된다`);
   });
 });

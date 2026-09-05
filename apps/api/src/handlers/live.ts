@@ -12,6 +12,22 @@ import type { LiveResponse } from '../../../../packages/domain/src/model.js';
 const cacheSeconds = 120;
 const staleWhileRevalidateSeconds = 240;
 
+// 캐시 지시를 두 갈래로 나눠 보낸다.
+//
+// Vercel 프록시는 `Cache-Control`의 `s-maxage`와 `stale-while-revalidate`를 자기가 먹고
+// 클라이언트에 보내는 헤더에서 지운다(Vercel 문서, Cache-Control headers). 그래서 한 헤더에
+// 다 적으면 브라우저에 남는 것이 `public` 하나이거나 Vercel 기본값이고, 화면은 다음 조회를
+// 언제 해야 하는지 알 길이 없다. 실측으로 그 경우 폴링이 60초 또는 5초로 떨어졌다.
+//
+// `Vercel-CDN-Cache-Control`은 Vercel 캐시에만 적용되고 클라이언트로 전달되지 않는다.
+// `Cache-Control`은 그대로 전달된다. 그래서 CDN 몫과 브라우저 몫을 갈라 적는다.
+export const cdnCacheControl = `public, s-maxage=${cacheSeconds}, stale-while-revalidate=${staleWhileRevalidateSeconds}`;
+
+// 브라우저 몫에는 `stale-while-revalidate`를 넣지 않는다. 넣으면 브라우저가 낡은 응답을
+// 자기 캐시에서 계속 내주는 것을 실측으로 확인했다. 수명은 CDN과 같은 값이라, 브라우저가
+// 자기 사본을 쓰는 동안에도 CDN이 줄 답과 같은 판이다.
+export const browserCacheControl = `public, max-age=${cacheSeconds}`;
+
 // 이 관측을 실시간이라 부를 수 있는 기간.
 //
 // 공유 캐시가 최대 cacheSeconds 만큼 묵은 응답을 정상적으로 내주므로 그만큼은 낡음이 아니다.
@@ -80,7 +96,8 @@ export default async function handler(request: RequestLike, response: ResponseLi
   try {
     const snapshot = await fetchLiveSnapshot(routeName, apiKey);
     const body: LiveResponse = { ...snapshot, staleAt: staleAtFor(snapshot.observedAt) };
-    response.setHeader('Cache-Control', `public, s-maxage=${cacheSeconds}, stale-while-revalidate=${staleWhileRevalidateSeconds}`);
+    response.setHeader('Vercel-CDN-Cache-Control', cdnCacheControl);
+    response.setHeader('Cache-Control', browserCacheControl);
     response.status(200).json(body);
   } catch (error: unknown) {
     const status = error instanceof GbisError ? error.status : 502;
