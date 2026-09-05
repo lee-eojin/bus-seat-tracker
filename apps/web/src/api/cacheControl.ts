@@ -4,13 +4,12 @@
 // 그 응답이 캐시에서 보낸 시간을 적는다. 둘의 차이가 지금부터 남은 수명이다. 이 값이
 // 있으면 화면이 다음 호출 시각을 스스로 정하지 않아도 된다 (pollSchedule.ts).
 //
-// max-age가 없으면 s-maxage를 본다. 이 저장소의 `/api/live`는 브라우저 캐시를 켜지 않고
-// 공유 캐시 수명만 선언한다(`public, s-maxage=120, stale-while-revalidate=240`).
-// 우리가 알고 싶은 것은 그 공유 캐시에 새 답이 언제 생기느냐이므로 s-maxage가 바로
-// 그 값이다. 표준 우선순위대로 max-age가 있으면 그쪽이 이긴다.
+// s-maxage는 보지 않는다. 그것은 공유 캐시 몫이고, 애초에 브라우저까지 오지도 않는다.
+// Vercel 프록시가 그 지시를 자기가 먹고 클라이언트 응답에서 지운다. 서버는 브라우저 몫을
+// `Cache-Control`에, CDN 몫을 `Vercel-CDN-Cache-Control`에 나눠 적는다
+// (apps/api/src/handlers/live.ts).
 
 const maxAgeDirective = /^max-age="?(\d+)"?$/i;
-const sharedMaxAgeDirective = /^s-maxage="?(\d+)"?$/i;
 const wholeSeconds = /^\d+$/;
 
 export interface CacheLifetime {
@@ -25,15 +24,15 @@ export function cacheLifetimeFrom(headers: Headers): CacheLifetime {
 
   return {
     noStore: directives.some((directive) => directive.toLowerCase() === 'no-store'),
-    maxAgeSeconds: secondsIn(directives, maxAgeDirective) ?? secondsIn(directives, sharedMaxAgeDirective),
+    maxAgeSeconds: maxAgeSecondsIn(directives),
     // Age가 없거나 정수가 아니면 0으로 본다. 캐시를 안 거친 응답이 그렇다.
     ageSeconds: age !== null && wholeSeconds.test(age) ? Number(age) : 0,
   };
 }
 
-function secondsIn(directives: string[], pattern: RegExp): number | null {
+function maxAgeSecondsIn(directives: string[]): number | null {
   for (const directive of directives) {
-    const seconds = pattern.exec(directive)?.[1];
+    const seconds = maxAgeDirective.exec(directive)?.[1];
     if (seconds !== undefined) return Number(seconds);
   }
   return null;

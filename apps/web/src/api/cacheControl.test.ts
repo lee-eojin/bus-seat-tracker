@@ -12,17 +12,18 @@ describe('cacheLifetimeFrom', () => {
     assert.deepEqual(lifetime, { noStore: false, maxAgeSeconds: 20, ageSeconds: 7 });
   });
 
-  it('max-age가 없으면 s-maxage를 쓴다 (이 저장소의 /api/live가 그 형태다)', () => {
+  it('s-maxage는 안 본다 (공유 캐시 몫이고 Vercel이 클라이언트 응답에서 지운다)', () => {
     const lifetime = cacheLifetimeFrom(
       headersOf({ 'cache-control': 'public, s-maxage=120, stale-while-revalidate=240', age: '30' }),
     );
-    assert.equal(lifetime.maxAgeSeconds, 120);
+    assert.equal(lifetime.maxAgeSeconds, null, '수명을 모르는 것으로 두고 대체값으로 물러난다');
     assert.equal(lifetime.ageSeconds, 30);
   });
 
-  it('둘 다 있으면 max-age가 이긴다', () => {
-    const lifetime = cacheLifetimeFrom(headersOf({ 'cache-control': 'max-age=15, s-maxage=120' }));
-    assert.equal(lifetime.maxAgeSeconds, 15);
+  it('서버가 브라우저 몫으로 내는 값을 읽는다', () => {
+    const lifetime = cacheLifetimeFrom(headersOf({ 'cache-control': 'public, max-age=120', age: '30' }));
+    assert.equal(lifetime.maxAgeSeconds, 120);
+    assert.equal(lifetime.ageSeconds, 30);
   });
 
   it('no-store를 알아본다', () => {
